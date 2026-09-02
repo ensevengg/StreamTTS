@@ -4,14 +4,48 @@ import { Card } from '@/components/ui/card';
 import { Volume2, User } from 'lucide-react';
 import { Message } from '@/types/message';
 import { TTS_COMMAND_PREFIX } from '@/config/security';
-
-interface MessageHistoryProps {
-  messages: Message[];
-}
+import { useChatStore } from '@/stores/chatStore';
 
 const MAX_VISIBLE_MESSAGES = 100;
 
-const MessageHistory: React.FC<MessageHistoryProps> = ({ messages }) => {
+const COMMAND_PREFIX_PATTERN = new RegExp(`^${TTS_COMMAND_PREFIX}\\s*`, 'i');
+
+const stripCommandPrefix = (content: string): string =>
+  content.replace(COMMAND_PREFIX_PATTERN, '');
+
+interface MessageRowProps {
+  message: Message;
+}
+
+// Memoized so an incoming message renders only the new row, and a status
+// change (pending -> playing -> completed) re-renders only its own row.
+const MessageRow = React.memo<MessageRowProps>(({ message }) => (
+  <div
+    className={`p-3 rounded-lg ${
+      message.status === 'playing'
+        ? 'bg-stream-accent/20 border border-stream-accent animate-pulse-glow'
+        : 'bg-muted/30'
+    }`}
+  >
+    <div className="flex items-center gap-2 mb-1">
+      <User size={16} className="text-stream-accent" />
+      <span className="text-sm font-semibold text-stream-accent">
+        {message.username || 'Viewer'}
+      </span>
+      <span className="text-xs text-muted-foreground ml-auto">
+        {new Date(message.timestamp).toLocaleTimeString()}
+      </span>
+    </div>
+    <p className="text-sm ml-6">{stripCommandPrefix(message.content)}</p>
+  </div>
+));
+MessageRow.displayName = 'MessageRow';
+
+// Subscribes to the chat store directly so incoming messages never re-render
+// anything above this component (Index, tabs, input, volume control).
+const MessageHistory: React.FC = () => {
+  const messages = useChatStore(s => s.messages);
+
   const visibleMessages = useMemo(() => {
     return messages.slice(-MAX_VISIBLE_MESSAGES);
   }, [messages]);
@@ -28,25 +62,7 @@ const MessageHistory: React.FC<MessageHistoryProps> = ({ messages }) => {
         ) : (
           <div className="space-y-4">
             {visibleMessages.map((message) => (
-              <div 
-                key={message.id}
-                className={`p-3 rounded-lg ${
-                  message.status === 'playing' 
-                    ? 'bg-stream-accent/20 border border-stream-accent animate-pulse-glow' 
-                    : 'bg-muted/30'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-1">
-                  <User size={16} className="text-stream-accent" />
-                  <span className="text-sm font-semibold text-stream-accent">
-                    {message.username || 'Viewer'}
-                  </span>
-                  <span className="text-xs text-muted-foreground ml-auto">
-                    {new Date(message.timestamp).toLocaleTimeString()}
-                  </span>
-                </div>
-                <p className="text-sm ml-6">{message.content.replace(new RegExp(`^${TTS_COMMAND_PREFIX}\\s*`, 'i'), '')}</p>
-              </div>
+              <MessageRow key={message.id} message={message} />
             ))}
             {messages.length > MAX_VISIBLE_MESSAGES && (
               <p className="text-xs text-muted-foreground text-center">

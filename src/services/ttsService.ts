@@ -11,6 +11,7 @@ interface TTSRequestOptions {
 
 const DEFAULT_VOICE_ID = 'IKne3meq5aSn9XLyUdCD';
 const DEFAULT_MODEL_ID = 'eleven_multilingual_v2';
+const COMMAND_PREFIX_PATTERN = new RegExp(`^${TTS_COMMAND_PREFIX}\\s*`, 'i');
 
 export type TTSProvider = 'browser' | 'elevenlabs';
 
@@ -88,7 +89,7 @@ export async function playMessageAudio(
 ): Promise<void> {
   try {
     // Extract the actual text without the !г (Russian r) command
-    const textToSpeak = message.content.replace(new RegExp(`^${TTS_COMMAND_PREFIX}\\s*`, 'i'), '');
+    const textToSpeak = message.content.replace(COMMAND_PREFIX_PATTERN, '');
     
     if (provider === 'browser') {
       // Use browser's built-in speech synthesis (no token limits)

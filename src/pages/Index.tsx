@@ -43,7 +43,6 @@ const Index = () => {
     toast,
   });
 
-  const messages = useChatStore(s => s.messages);
   const activeTab = useChatStore(s => s.activeTab);
   const isProcessing = useChatStore(s => s.isProcessing);
   const addMessage = useChatStore(s => s.addMessage);
@@ -204,7 +203,7 @@ const Index = () => {
               <Suspense fallback={<div className="p-4">Loading...</div>}>
                 <TabsContent value="chat" className="space-y-4 flex-1 flex flex-col">
                   <div className="flex-1 overflow-y-auto">
-                    <MessageHistory messages={messages} />
+                    <MessageHistory />
                   </div>
                   
                   <div className="flex justify-center my-4">
