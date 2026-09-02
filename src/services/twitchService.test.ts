@@ -18,7 +18,11 @@ import {
   clearTwitchOAuthToken,
   isTwitchTokenStale,
   getTokenAgeMinutes,
+  refreshTwitchToken,
 } from './twitchService';
+
+// Outside Tauri the service stores under this key in localStorage.
+const TOKEN_KEY = 'twitch_oauth_token';
 
 describe('twitchService token management', () => {
   beforeEach(() => {
@@ -26,59 +30,87 @@ describe('twitchService token management', () => {
     vi.clearAllMocks();
   });
 
-  it('round-trips a token', () => {
-    saveTwitchOAuthToken('abc123');
-    expect(getTwitchOAuthToken()).toBe('abc123');
-    expect(hasTwitchOAuthToken()).toBe(true);
+  it('round-trips a token', async () => {
+    await saveTwitchOAuthToken('abc123');
+    expect(await getTwitchOAuthToken()).toBe('abc123');
+    expect(await hasTwitchOAuthToken()).toBe(true);
   });
 
-  it('clears a token', () => {
-    saveTwitchOAuthToken('abc123');
-    clearTwitchOAuthToken();
-    expect(getTwitchOAuthToken()).toBeNull();
-    expect(hasTwitchOAuthToken()).toBe(false);
+  it('stores refresh token and expiry when provided', async () => {
+    await saveTwitchOAuthToken('abc123', 'def456', 3600);
+    const raw = JSON.parse(localStorageMock.getItem(TOKEN_KEY) ?? '{}');
+    expect(raw.token).toBe('abc123');
+    expect(raw.refresh_token).toBe('def456');
+    expect(raw.expires_at).toBeGreaterThan(Date.now());
   });
 
-  it('returns null when no token stored', () => {
-    expect(getTwitchOAuthToken()).toBeNull();
-    expect(hasTwitchOAuthToken()).toBe(false);
+  it('clears a token', async () => {
+    await saveTwitchOAuthToken('abc123');
+    await clearTwitchOAuthToken();
+    expect(await getTwitchOAuthToken()).toBeNull();
+    expect(await hasTwitchOAuthToken()).toBe(false);
   });
 
-  it('isTwitchTokenStale returns true when no token', () => {
-    expect(isTwitchTokenStale()).toBe(true);
+  it('returns null when no token stored', async () => {
+    expect(await getTwitchOAuthToken()).toBeNull();
+    expect(await hasTwitchOAuthToken()).toBe(false);
   });
 
-  it('isTwitchTokenStale returns false for fresh token', () => {
-    saveTwitchOAuthToken('fresh-token');
-    expect(isTwitchTokenStale()).toBe(false);
+  it('isTwitchTokenStale returns true when no token', async () => {
+    expect(await isTwitchTokenStale()).toBe(true);
   });
 
-  it('isTwitchTokenStale returns true for old token', () => {
-    const old = { token: 'old', timestamp: Date.now() - 61 * 60 * 1000 };
-    localStorageMock.setItem('twitchOAuthToken', JSON.stringify(old));
-    expect(isTwitchTokenStale()).toBe(true);
+  it('isTwitchTokenStale returns false for token without known expiry', async () => {
+    await saveTwitchOAuthToken('fresh-token');
+    expect(await isTwitchTokenStale()).toBe(false);
   });
 
-  it('getTokenAgeMinutes returns null when no token', () => {
-    expect(getTokenAgeMinutes()).toBeNull();
+  it('isTwitchTokenStale returns true when token expires within the buffer', async () => {
+    const expiring = {
+      token: 'soon',
+      timestamp: Date.now(),
+      expires_at: Date.now() + 5 * 60 * 1000,
+    };
+    localStorageMock.setItem(TOKEN_KEY, JSON.stringify(expiring));
+    expect(await isTwitchTokenStale()).toBe(true);
   });
 
-  it('getTokenAgeMinutes returns a number for fresh token', () => {
-    saveTwitchOAuthToken('token');
-    const age = getTokenAgeMinutes();
+  it('isTwitchTokenStale returns false for token with distant expiry', async () => {
+    const valid = {
+      token: 'long-lived',
+      timestamp: Date.now(),
+      expires_at: Date.now() + 3600 * 1000,
+    };
+    localStorageMock.setItem(TOKEN_KEY, JSON.stringify(valid));
+    expect(await isTwitchTokenStale()).toBe(false);
+  });
+
+  it('getTokenAgeMinutes returns null when no token', async () => {
+    expect(await getTokenAgeMinutes()).toBeNull();
+  });
+
+  it('getTokenAgeMinutes returns a number for fresh token', async () => {
+    await saveTwitchOAuthToken('token');
+    const age = await getTokenAgeMinutes();
     expect(age).toBeTypeOf('number');
     expect(age).toBeGreaterThanOrEqual(0);
   });
 
-  it('handles legacy string-only token format', () => {
-    localStorageMock.setItem('twitchOAuthToken', JSON.stringify('legacy-token'));
-    expect(getTwitchOAuthToken()).toBe('legacy-token');
-    expect(hasTwitchOAuthToken()).toBe(true);
+  it('handles legacy string-only token format', async () => {
+    localStorageMock.setItem(TOKEN_KEY, JSON.stringify('legacy-token'));
+    expect(await getTwitchOAuthToken()).toBe('legacy-token');
+    expect(await hasTwitchOAuthToken()).toBe(true);
   });
 
-  it('survives corrupted localStorage gracefully', () => {
-    localStorageMock.setItem('twitchOAuthToken', '{bad json');
-    expect(getTwitchOAuthToken()).toBeNull();
-    expect(hasTwitchOAuthToken()).toBe(false);
+  it('survives corrupted storage gracefully', async () => {
+    localStorageMock.setItem(TOKEN_KEY, '{bad json');
+    expect(await getTwitchOAuthToken()).toBeNull();
+    expect(await hasTwitchOAuthToken()).toBe(false);
+  });
+
+  it('refreshTwitchToken returns null without a refresh token', async () => {
+    await saveTwitchOAuthToken('abc123');
+    expect(await refreshTwitchToken()).toBeNull();
+    expect(await hasTwitchOAuthToken()).toBe(true);
   });
 });
