@@ -7,7 +7,8 @@ import { useToast } from '@/hooks/use-toast';
 import { Message } from '@/types/message';
 import { ChatConnection } from '@/types/chatSource';
 import { TTS_COMMAND_PREFIX, hasTwitchClientId } from '@/config/security';
-import { buildTwitchAuthUrl, openAuthPopup } from '@/lib/oauth-utils';
+import { buildTwitchAuthUrl, prepareOAuthState } from '@/lib/oauth-utils';
+import { openExternalAuth, isTauriAvailable } from '@/lib/tauri-api';
 
 export function useTwitchConnection() {
   const [isConnecting, setIsConnecting] = useState(false);
@@ -98,21 +99,29 @@ export function useTwitchConnection() {
       await disconnectFromTwitchChat(conn.channelName);
       removeConnection(conn.id);
     }
-    clearTwitchOAuthToken();
+    await clearTwitchOAuthToken();
     logoutTwitch();
     toast({ title: "Twitch Disconnected", description: "You've been logged out of Twitch" });
   }, [connections, removeConnection, logoutTwitch, toast]);
 
-  const startAuth = useCallback(() => {
+  const startAuth = useCallback(async () => {
     if (!hasTwitchClientId) {
       toast({ title: "Twitch Not Configured", description: "Set VITE_TWITCH_CLIENT_ID in your .env file to enable Twitch login.", variant: "destructive", duration: 8000 });
       return;
     }
-    const popup = openAuthPopup(buildTwitchAuthUrl(), 'twitch_auth');
-    if (!popup) {
-      toast({ title: "Popup Blocked", description: "Please allow popups and try again.", variant: "destructive" });
+    try {
+      const { url, state, codeVerifier } = await buildTwitchAuthUrl();
+      await prepareOAuthState('twitch', state, codeVerifier);
+      if (isTauriAvailable()) {
+        await openExternalAuth(url);
+      } else {
+        window.location.href = url;
+      }
+      toast({ title: "Twitch Authentication", description: "Complete authentication in the browser window." });
+    } catch (error) {
+      console.error("Twitch auth failed to start:", error);
+      toast({ title: "Authentication Error", description: "Failed to open Twitch authentication page", variant: "destructive" });
     }
-    toast({ title: "Twitch Authentication", description: "Complete authentication in the popup window." });
   }, [toast]);
 
   const disconnectById = useCallback((connectionId: string) => {

@@ -2,16 +2,11 @@ import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-shell';
 
 export const isTauriAvailable = (): boolean => {
-  // Simple check for Tauri environment
-  return typeof window !== 'undefined' && 
-         '__TAURI__' in window;
+  // The IPC plumbing object is always injected in a Tauri webview, unlike the
+  // optional global API object (withGlobalTauri), which we no longer enable.
+  return typeof window !== 'undefined' &&
+         '__TAURI_INTERNALS__' in window;
 };
-
-// Allowed origins for postMessage - only accept from our own server
-const TRUSTED_ORIGINS = [
-  'http://localhost:3000',
-  'http://localhost:8080',
-];
 
 export interface AuthCallbackData {
   type: string;
@@ -20,6 +15,7 @@ export interface AuthCallbackData {
   service?: string;
   refresh_token?: string;
   expires_in?: number;
+  state?: string;
 }
 
 export interface AlertData {
@@ -32,12 +28,12 @@ export interface AlertData {
   count?: number;
 }
 
-export const openExternalAuth = async (url: string, redirectUrl: string): Promise<void> => {
-  
+export const openExternalAuth = async (url: string): Promise<void> => {
+
   if (!isTauriAvailable()) {
     throw new Error('Tauri is not available');
   }
-  
+
   try {
     await open(url);
   } catch (error) {
@@ -47,34 +43,34 @@ export const openExternalAuth = async (url: string, redirectUrl: string): Promis
 };
 
 export const onAuthCallback = (callback: (data: AuthCallbackData) => void): (() => void) => {
-  
+
   if (!isTauriAvailable()) {
     console.warn('TauriAPI: Tauri not available, returning no-op callback');
     return () => {};
   }
-  
+
   const unlisten = listen<AuthCallbackData>('auth-callback', (event) => {
     const data = event.payload;
     callback(data);
   });
-  
+
   return () => {
     unlisten.then(fn => fn()).catch(console.error);
   };
 };
 
 export const onAlert = (callback: (data: AlertData) => void): (() => void) => {
-  
+
   if (!isTauriAvailable()) {
     console.warn('TauriAPI: Tauri not available, returning no-op alert callback');
     return () => {};
   }
-  
+
   const unlisten = listen<AlertData>('integration-alert', (event) => {
     const data = event.payload;
     callback(data);
   });
-  
+
   return () => {
     unlisten.then(fn => fn()).catch(console.error);
   };

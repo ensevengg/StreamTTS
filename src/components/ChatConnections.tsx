@@ -1,35 +1,19 @@
-import React, { useCallback } from 'react';
+import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Twitch, Youtube, X, LogIn, CheckCircle, LogOut, PlugIcon, Power } from 'lucide-react';
 import { ChatSource } from '@/types/chatSource';
-import { useToast } from '@/hooks/use-toast';
 import { useChatStore } from '@/stores/chatStore';
-import { useAuthStore } from '@/stores/authStore';
-import { useShallow } from 'zustand/react/shallow';
 import { useTwitchConnection } from '@/hooks/useTwitchConnection';
 import { useYoutubeConnection } from '@/hooks/useYoutubeConnection';
-import { useOAuthCallback } from '@/hooks/useOAuthCallback';
 import DiagnoseYouTube from '@/components/DiagnoseYouTube';
 
 const ChatConnections: React.FC = () => {
-  const { toast } = useToast();
-
   const connections = useChatStore(s => s.connections);
-
-  const { setTwitchAuth, setYoutubeAuth } =
-    useAuthStore(useShallow(s => ({ setTwitchAuth: s.setTwitchAuth, setYoutubeAuth: s.setYoutubeAuth })));
 
   const twitch = useTwitchConnection();
   const youtube = useYoutubeConnection();
-
-  useOAuthCallback({
-    onTwitchAuth: useCallback(() => setTwitchAuth(true), [setTwitchAuth]),
-    onYoutubeAuth: useCallback(() => setYoutubeAuth(true), [setYoutubeAuth]),
-    onYoutubeBroadcastsCheck: useCallback(async () => {}, []),
-    toast,
-  });
 
   const getSourceIcon = (source: ChatSource) => {
     switch (source) {
