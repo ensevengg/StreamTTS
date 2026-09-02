@@ -6,8 +6,6 @@ pub struct AlertPayload {
     pub alert_type: String,
     pub user_name: String,
     pub message: String,
-    pub amount: Option<String>,
-    pub currency: Option<String>,
     pub count: Option<u32>,
 }
 
@@ -56,8 +54,6 @@ pub fn process_twitch_event(payload: TwitchEventSubPayload) -> Option<AlertPaylo
                 alert_type: "sub".to_string(),
                 user_name: user_name.clone(),
                 message: format!("{} just subscribed!", user_name),
-                amount: None,
-                currency: None,
                 count: None,
             })
         }
@@ -72,8 +68,6 @@ pub fn process_twitch_event(payload: TwitchEventSubPayload) -> Option<AlertPaylo
                 alert_type: "gift".to_string(),
                 user_name: user_name.clone(),
                 message: format!("{} gifted {} subscriptions!", user_name, total),
-                amount: None,
-                currency: None,
                 count: Some(total),
             })
         }
@@ -91,8 +85,6 @@ pub fn process_twitch_event(payload: TwitchEventSubPayload) -> Option<AlertPaylo
                 alert_type: "redemption".to_string(),
                 user_name: user_name.clone(),
                 message: format!("{} redeemed {}!", user_name, reward_title),
-                amount: None,
-                currency: None,
                 count: None,
             })
         }
@@ -127,8 +119,6 @@ pub fn process_youtube_alert(xml_content: &str) -> Option<AlertPayload> {
             alert_type: "live".to_string(),
             user_name,
             message: "A new stream or video is live!".to_string(),
-            amount: None,
-            currency: None,
             count: None,
         });
     }

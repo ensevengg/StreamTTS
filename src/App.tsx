@@ -1,6 +1,5 @@
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useEffect, useRef, lazy, Suspense } from "react";
 import { listen } from "@tauri-apps/api/event";
@@ -119,27 +118,25 @@ const App = () => {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <AlertNotification />
-        <Suspense fallback={<Loading isStartup={true} message="Loading StreamTTS..." />}>
-          <HashRouter>
-            <Routes>
-              <Route path="/login" element={<Login />} />
-              <Route 
-                path="/" 
-                element={
-                  <ProtectedRoute>
-                    <Index />
-                  </ProtectedRoute>
-                } 
-              />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </HashRouter>
-        </Suspense>
-      </TooltipProvider>
+      <Toaster />
+      <Sonner />
+      <AlertNotification />
+      <Suspense fallback={<Loading isStartup={true} message="Loading StreamTTS..." />}>
+        <HashRouter>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route
+              path="/"
+              element={
+                <ProtectedRoute>
+                  <Index />
+                </ProtectedRoute>
+              }
+            />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </HashRouter>
+      </Suspense>
     </QueryClientProvider>
   );
 };

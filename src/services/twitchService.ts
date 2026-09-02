@@ -72,12 +72,6 @@ export const isTwitchTokenStale = async (): Promise<boolean> => {
   return isTokenExpiring(info);
 };
 
-export const getTokenAgeMinutes = async (): Promise<number | null> => {
-  const info = await getTwitchTokenInfo();
-  if (!info || info.timestamp === 0) return null;
-  return Math.floor((Date.now() - info.timestamp) / (60 * 1000));
-};
-
 export const clearTwitchOAuthToken = async (): Promise<void> => {
   try {
     await secureDelete(TWITCH_TOKEN_KEY);
@@ -349,28 +343,6 @@ class TwitchConnectionManager {
         resolve();
       }
     });
-  }
-
-  disconnectAll(): Promise<void> {
-    return this.disconnect();
-  }
-
-  isConnected(channelName?: string): boolean {
-    if (channelName) return this.clients.has(channelName);
-    return this.clients.size > 0;
-  }
-
-  getConnectedChannels(): string[] {
-    return Array.from(this.clients.keys());
-  }
-
-  dispose(): void {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
-      this.cleanupInterval = null;
-    }
-    this.clients.clear();
-    this.recentErrors.clear();
   }
 }
 

@@ -16,7 +16,6 @@ import {
   getStoredTokens,
   saveYoutubeTokens,
   clearYoutubeOAuthToken,
-  getYoutubeOAuthToken,
   getValidYoutubeToken,
   generateColorFromChannelId,
 } from './youtubeService';
@@ -38,7 +37,6 @@ describe('youtubeService token storage', () => {
     const t = makeTokens();
     await saveYoutubeTokens(t);
     expect(await hasYoutubeOAuthToken()).toBe(true);
-    expect(await getYoutubeOAuthToken()).toBe('ya29.abc');
     expect(await getStoredTokens()).toEqual(t);
   });
 
@@ -52,7 +50,6 @@ describe('youtubeService token storage', () => {
   it('returns null when nothing stored', async () => {
     expect(await getStoredTokens()).toBeNull();
     expect(await hasYoutubeOAuthToken()).toBe(false);
-    expect(await getYoutubeOAuthToken()).toBeNull();
   });
 
   it('getValidYoutubeToken returns token when fresh', async () => {
@@ -69,7 +66,6 @@ describe('youtubeService token storage', () => {
     localStorageMock.setItem('youtube_oauth_tokens', '{bad');
     expect(await getStoredTokens()).toBeNull();
     expect(await hasYoutubeOAuthToken()).toBe(false);
-    expect(await getYoutubeOAuthToken()).toBeNull();
   });
 
   it('survives token with empty access_token', async () => {

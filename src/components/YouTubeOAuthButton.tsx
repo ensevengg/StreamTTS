@@ -29,9 +29,6 @@ const YouTubeOAuthButton: React.FC<YouTubeOAuthButtonProps> = ({ onAuthChange })
     };
 
     void syncTokenState();
-
-    window.addEventListener('storage', syncTokenState);
-    return () => window.removeEventListener('storage', syncTokenState);
   }, [isAuthorized, onAuthChange]);
 
   React.useEffect(() => {

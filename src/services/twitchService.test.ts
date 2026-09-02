@@ -17,7 +17,6 @@ import {
   hasTwitchOAuthToken,
   clearTwitchOAuthToken,
   isTwitchTokenStale,
-  getTokenAgeMinutes,
   refreshTwitchToken,
 } from './twitchService';
 
@@ -83,17 +82,6 @@ describe('twitchService token management', () => {
     };
     localStorageMock.setItem(TOKEN_KEY, JSON.stringify(valid));
     expect(await isTwitchTokenStale()).toBe(false);
-  });
-
-  it('getTokenAgeMinutes returns null when no token', async () => {
-    expect(await getTokenAgeMinutes()).toBeNull();
-  });
-
-  it('getTokenAgeMinutes returns a number for fresh token', async () => {
-    await saveTwitchOAuthToken('token');
-    const age = await getTokenAgeMinutes();
-    expect(age).toBeTypeOf('number');
-    expect(age).toBeGreaterThanOrEqual(0);
   });
 
   it('handles legacy string-only token format', async () => {

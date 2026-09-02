@@ -72,9 +72,6 @@ const TwitchOAuthButton: React.FC<TwitchOAuthButtonProps> = ({ onAuthChange }) =
     };
 
     void syncTokenState();
-
-    window.addEventListener('storage', syncTokenState);
-    return () => window.removeEventListener('storage', syncTokenState);
   }, [isAuthorized, onAuthChange]);
 
   React.useEffect(() => {

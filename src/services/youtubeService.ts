@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/core';
-import { Message } from '@/types/message';
 import { isTauriAvailable } from '@/lib/tauri-api';
 import { secureGet, secureSet, secureDelete } from '@/lib/secureStorage';
 
@@ -129,37 +128,6 @@ export const getValidYoutubeToken = async (): Promise<string | null> => {
   }
 
   return tokens.access_token;
-};
-
-export const getYoutubeOAuthToken = async (): Promise<string | null> => {
-  const tokens = await getStoredTokens();
-  return tokens?.access_token || null;
-};
-
-export const validateToken = async (token: string): Promise<boolean> => {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    
-    const response = await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true', {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      },
-      signal: controller.signal
-    });
-    
-    clearTimeout(timeoutId);
-    
-    if (response.ok) {
-      return true;
-    } else {
-      console.error(`YouTubeService: Token validation failed (${response.status})`);
-      return false;
-    }
-  } catch (error) {
-    console.error("YouTubeService: Token validation error", error);
-    return false;
-  }
 };
 
 export const fetchYouTubeLiveBroadcasts = async (): Promise<any[]> => {

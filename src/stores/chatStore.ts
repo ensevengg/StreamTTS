@@ -11,8 +11,6 @@ interface ChatState {
   isProcessing: boolean;
   addMessage: (message: Message) => void;
   updateMessageStatus: (id: string, status: Message['status']) => void;
-  setMessages: (messages: Message[]) => void;
-  setConnections: (connections: ChatConnection[]) => void;
   addConnection: (connection: ChatConnection) => void;
   removeConnection: (id: string) => void;
   updateConnectionStatus: (id: string, isConnected: boolean, error?: string, status?: ConnectionStatus) => void;
@@ -38,10 +36,6 @@ export const useChatStore = create<ChatState>((set) => ({
         msg.id === id ? { ...msg, status } : msg
       ),
     })),
-
-  setMessages: (messages) => set({ messages }),
-
-  setConnections: (connections) => set({ connections }),
 
   addConnection: (connection) =>
     set((state) => ({ connections: [...state.connections, connection] })),

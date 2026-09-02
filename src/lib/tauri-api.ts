@@ -23,8 +23,6 @@ export interface AlertData {
   alert_type: string;
   user_name: string;
   message: string;
-  amount?: string;
-  currency?: string;
   count?: number;
 }
 

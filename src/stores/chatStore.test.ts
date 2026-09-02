@@ -64,12 +64,6 @@ describe('chatStore', () => {
       useChatStore.getState().updateMessageStatus('nonexistent', 'completed');
       expect(useChatStore.getState().messages).toHaveLength(1);
     });
-
-    it('setMessages replaces all messages', () => {
-      useChatStore.getState().addMessage(makeMsg('1'));
-      useChatStore.getState().setMessages([makeMsg('2'), makeMsg('3')]);
-      expect(useChatStore.getState().messages).toHaveLength(2);
-    });
   });
 
   describe('connections', () => {
@@ -102,13 +96,6 @@ describe('chatStore', () => {
       useChatStore.getState().updateConnectionStatus('twitch-1', false, 'Network down');
       expect(useChatStore.getState().connections[0].isConnected).toBe(false);
       expect(useChatStore.getState().connections[0].error).toBe('Network down');
-    });
-
-    it('setConnections replaces all connections', () => {
-      useChatStore.getState().addConnection(makeConn('twitch-1'));
-      useChatStore.getState().setConnections([{ ...makeConn('yt-1'), type: 'youtube' }]);
-      expect(useChatStore.getState().connections).toHaveLength(1);
-      expect(useChatStore.getState().connections[0].type).toBe('youtube');
     });
 
     it('tracks multiple platforms independently', () => {

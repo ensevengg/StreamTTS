@@ -38,7 +38,6 @@ export default defineConfig({
           
           // UI Library chunks
           'radix-core': [
-            '@radix-ui/react-tooltip',
             '@radix-ui/react-slider',
             '@radix-ui/react-select',
             '@radix-ui/react-switch',
@@ -99,8 +98,8 @@ export default defineConfig({
   // Advanced dependency optimization
   optimizeDeps: {
     include: [
-      'react', 
-      'react-dom', 
+      'react',
+      'react-dom',
       'react-router-dom',
       '@tanstack/react-query',
       'lucide-react',
@@ -116,23 +115,5 @@ export default defineConfig({
         'top-level-await': true
       }
     }
-  },
-  // Faster startup by reducing ESBuild transforms
-  esbuild: {
-    target: 'es2020',
-    // Advanced tree shaking
-    treeShaking: true,
-    legalComments: 'none',
-    logLevel: 'error',
-    // Drop specific functions in production
-    drop: process.env.NODE_ENV === 'production' ? ['console', 'debugger'] : [],
-    // Optimize JSX
-    jsxFactory: 'React.createElement',
-    jsxFragment: 'React.Fragment'
-  },
-  // Define global constants for better tree shaking
-  define: {
-    __DEV__: process.env.NODE_ENV === 'development',
-    __PROD__: process.env.NODE_ENV === 'production'
   }
 });

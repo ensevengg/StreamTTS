@@ -136,11 +136,6 @@ const AlertNotification: React.FC<AlertNotificationProps> = ({ className }) => {
                 <p className="text-sm text-muted-foreground mt-1">
                   {alert.message}
                 </p>
-                {alert.amount && (
-                  <p className="text-sm font-semibold text-green-600 mt-1">
-                    {alert.amount} {alert.currency}
-                  </p>
-                )}
                 {alert.count && (
                   <p className="text-sm font-semibold text-purple-600 mt-1">
                     {alert.count} items

@@ -127,18 +127,3 @@ export const validateOAuthState = (receivedState: string | null): boolean => {
   }
 };
 
-// Sanitize a string for safe display (strip HTML tags, limit length)
-export const sanitizeForDisplay = (input: string, maxLength: number = 100): string => {
-  if (!input || typeof input !== 'string') return '';
-  return input
-    .replace(/[<>&"']/g, '') // Strip HTML-significant characters
-    .replace(/\0/g, '')      // Strip null bytes
-    .slice(0, maxLength)
-    .trim();
-};
-
-// Validate a username is safe (alphanumeric + underscore, reasonable length)
-export const isValidUsername = (name: string): boolean => {
-  if (!name || typeof name !== 'string') return false;
-  return /^[a-zA-Z0-9_]{1,30}$/.test(name);
-};

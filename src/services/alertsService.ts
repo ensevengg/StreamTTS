@@ -32,29 +32,7 @@ export class AlertService {
     this.alertCleanup = onAlert((alert: AlertData) => {
       this.handleAlert(alert);
     });
-
-    window.addEventListener('message', this.handlePostMessage);
   }
-
-  private handlePostMessage = (event: MessageEvent) => {
-    // Validate origin for security - only accept messages from trusted origins
-    const validOrigins = [
-      window.location.origin,
-      'http://localhost:3000',
-      'http://localhost:5173',
-      'http://localhost:8080'
-    ];
-    if (!validOrigins.includes(event.origin)) {
-      return;
-    }
-    
-    if (event.source !== window) return;
-    
-    const data = event.data;
-    if (data && data.platform && data.alert_type && data.user_name) {
-      this.handleAlert(data as AlertData);
-    }
-  };
 
   private handleAlert(alert: AlertData): void {
     if (!this.settings.enabled) {
@@ -73,7 +51,6 @@ export class AlertService {
       this.alertCleanup();
       this.alertCleanup = null;
     }
-    window.removeEventListener('message', this.handlePostMessage);
   }
 
   public getSettings(): AlertSettings {
