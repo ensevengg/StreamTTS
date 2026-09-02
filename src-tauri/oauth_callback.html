@@ -22,11 +22,8 @@
         <p class="processing">Please wait while we complete your authorization...</p>
         <p>This window will automatically process your authorization and close when complete.</p>
     </div>
-    
+
     <script>
-        let error = null;
-        let service = null;
-        
         const showSuccess = () => {
             document.body.innerHTML = `
                 <div class="container">
@@ -40,12 +37,12 @@
                 </div>
             `;
             document.body.style.backgroundColor = '#f0fff4';
-            
+
             setTimeout(() => {
                 try { window.close(); } catch (e) {}
             }, 1000);
         };
-        
+
         const showError = (message) => {
             const safe = String(message || 'Unknown error').replace(/[<>&"']/g, '');
             document.body.innerHTML = `
@@ -54,7 +51,7 @@
                     <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="10"></circle>
                         <line x1="15" y1="9" x2="9" y2="15"></line>
-                        <line x1="9" y1="9" x2="15" y2="15"></line>
+                        <line x1="9" y1="9" x2="15" y2="9"></line>
                     </svg>
                     <p style="color: #ef4444; font-size: 20px;">Authentication failed: ${safe}</p>
                     <p>Please close this window and try again.</p>
@@ -62,78 +59,63 @@
             `;
             document.body.style.backgroundColor = '#fff5f5';
         };
-        
-        const sendAuthComplete = (token, service, refreshToken, expiresIn, state) => {
-            const body = { token, service };
-            if (refreshToken) body.refresh_token = refreshToken;
-            if (expiresIn) body.expires_in = expiresIn;
-            if (state) body.state = state;
-            
-            fetch('/auth-complete', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            })
-            .then(response => {
-                if (response.ok) {
-                    showSuccess();
-                } else {
-                    showError('Server error');
-                }
-            })
-            .catch(err => {
-                showError('Connection error');
-            });
+
+        const postAuth = (body) => fetch('/auth-complete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+
+        // Best-effort notification to the app that the flow failed, so it can
+        // reset its UI. Only possible when we have a state to consume.
+        const reportError = (service, state, message) => {
+            if (!state || !service) return;
+            postAuth({ token: '', service, error: message, state }).catch(() => {});
         };
-        
+
+        // Authorization-code flow (Twitch and YouTube): the backend derives the
+        // service and PKCE verifier from the registered state, exchanges the
+        // code, and forwards the tokens to the app itself. This page only
+        // reports the outcome.
         const handleCodeFlow = (code, service, state) => {
             fetch('/auth-exchange', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ code: code, state: state })
             })
-            .then(response => response.json())
-            .then(data => {
-                if (data.access_token) {
-                    sendAuthComplete(data.access_token, service, data.refresh_token, data.expires_in, state);
-                } else if (data.error) {
-                    showError(data.error);
+            .then(async (response) => {
+                const data = await response.json().catch(() => ({}));
+                if (response.ok && data.access_token) {
+                    showSuccess();
                 } else {
-                    showError('Invalid response from server');
+                    showError(data.error || 'Server error');
+                    reportError(service, state, data.error || 'Token exchange failed');
                 }
             })
-            .catch(err => {
+            .catch(() => {
                 showError('Failed to exchange authorization code');
+                reportError(service, state, 'Connection error');
             });
         };
-        
-        const handleImplicitFlow = (accessToken, service, state) => {
-            sendAuthComplete(accessToken, service, null, null, state);
-        };
-        
+
         const queryParams = new URLSearchParams(window.location.search);
         const code = queryParams.get('code');
-        
-        const hash = window.location.hash.substring(1);
-        const hashParams = hash ? new URLSearchParams(hash) : new URLSearchParams();
-        const accessToken = hashParams.get('access_token');
-        
-        error = queryParams.get('error') || hashParams.get('error');
-        
-        const state = queryParams.get('state') || hashParams.get('state');
+        const error = queryParams.get('error');
+
+        const state = queryParams.get('state');
+        let service = null;
         if (state) {
             const parts = state.split('_');
             if (parts.length >= 1 && (parts[0] === 'youtube' || parts[0] === 'twitch')) {
                 service = parts[0];
             }
         }
-        
+
         if (error) {
+            reportError(service, state, error);
             showError(error);
         } else if (code) {
             handleCodeFlow(code, service, state);
-        } else if (accessToken) {
-            handleImplicitFlow(accessToken, service, state);
         } else {
             showError('No authorization data found');
         }
