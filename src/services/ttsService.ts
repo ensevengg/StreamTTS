@@ -18,7 +18,7 @@ function isSpeechSynthesisSupported(): boolean {
   return 'speechSynthesis' in window;
 }
 
-export async function generateSpeechFromText(options: TTSRequestOptions): Promise<ArrayBuffer> {
+async function generateSpeechFromText(options: TTSRequestOptions): Promise<ArrayBuffer> {
   const { text, apiKey, voice_id = DEFAULT_VOICE_ID, model_id = DEFAULT_MODEL_ID } = options;
   const url = `https://api.elevenlabs.io/v1/text-to-speech/${voice_id}`;
 
@@ -36,7 +36,7 @@ export async function generateSpeechFromText(options: TTSRequestOptions): Promis
   return await response.arrayBuffer();
 }
 
-export function useBrowserTTS(
+function speakWithBrowserTTS(
   text: string,
   onPlaybackStart: () => void,
   onPlaybackEnd: () => void,
@@ -92,7 +92,7 @@ export async function playMessageAudio(
     
     if (provider === 'browser') {
       // Use browser's built-in speech synthesis (no token limits)
-      await useBrowserTTS(textToSpeak, onPlaybackStart, onPlaybackEnd, volume, voiceName);
+      await speakWithBrowserTTS(textToSpeak, onPlaybackStart, onPlaybackEnd, volume, voiceName);
     } else {
       // Use ElevenLabs (original implementation)
       onPlaybackStart();
@@ -135,12 +135,4 @@ export async function playMessageAudio(
 export function getAvailableBrowserVoices(): SpeechSynthesisVoice[] {
   if (!isSpeechSynthesisSupported()) return [];
   return window.speechSynthesis.getVoices();
-}
-
-export function getRecommendedVoices(): SpeechSynthesisVoice[] {
-  const voices = getAvailableBrowserVoices();
-  const recommended = voices.filter(v =>
-    v.lang.startsWith('ru') || v.name.includes('Russian') || v.name.includes('русский') || v.name.includes('Pavel')
-  );
-  return recommended.length > 0 ? recommended : [];
 }
