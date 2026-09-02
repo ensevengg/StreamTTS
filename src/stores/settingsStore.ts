@@ -1,6 +1,7 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import { z } from 'zod';
+import { secureStateStorage } from '@/lib/secureStorage';
 
 export type TTSProvider = 'browser' | 'elevenlabs';
 
@@ -29,6 +30,8 @@ const defaults = {
   selectedVoice: '',
 };
 
+// Persisted (including the ElevenLabs API key) via the OS keychain; see
+// secureStateStorage. Hydration is async — state holds defaults until it lands.
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
@@ -41,6 +44,7 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'streamtts-settings',
+      storage: createJSONStorage(() => secureStateStorage),
       merge: (persisted, current) => {
         const parsed = settingsSchema.safeParse(persisted);
         return parsed.success ? { ...current, ...parsed.data } : current;
