@@ -8,7 +8,8 @@ import { useYoutubeBroadcasts } from '@/hooks/useYoutubeQueries';
 import { Message } from '@/types/message';
 import { ChatConnection } from '@/types/chatSource';
 import { TTS_COMMAND_PREFIX, hasYoutubeClientId } from '@/config/security';
-import { buildYouTubeAuthUrl, openAuthPopup } from '@/lib/oauth-utils';
+import { buildYouTubeAuthUrl, prepareOAuthState } from '@/lib/oauth-utils';
+import { openExternalAuth, isTauriAvailable } from '@/lib/tauri-api';
 
 export function useYoutubeConnection() {
   const [isConnecting, setIsConnecting] = useState(false);
@@ -111,7 +112,7 @@ export function useYoutubeConnection() {
     toast({ title: "YouTube Disconnected", description: "Successfully disconnected from all YouTube live streams" });
   }, [connections, removeConnection, toast]);
 
-  const handleLogout = useCallback(() => {
+  const handleLogout = useCallback(async () => {
     const youtubeConns = connections.filter(c => c.type === 'youtube');
     youtubeConns.forEach(conn => {
       removeConnection(conn.id);
@@ -121,25 +122,33 @@ export function useYoutubeConnection() {
         delete disconnectFns.current[conn.id];
       }
     });
-    clearYoutubeOAuthToken();
+    await clearYoutubeOAuthToken();
     logoutYoutube();
     toast({ title: "YouTube Disconnected", description: "You've been logged out of YouTube" });
   }, [connections, removeConnection, logoutYoutube, toast]);
 
-  const startAuth = useCallback(() => {
+  const startAuth = useCallback(async () => {
     if (!hasYoutubeClientId) {
       toast({ title: "YouTube Not Configured", description: "Set VITE_YOUTUBE_CLIENT_ID in your .env file to enable YouTube login.", variant: "destructive", duration: 8000 });
       return;
     }
-    const popup = openAuthPopup(buildYouTubeAuthUrl(), 'youtube_auth');
-    if (!popup) {
-      toast({ title: "Popup Blocked", description: "Please allow popups and try again.", variant: "destructive" });
+    try {
+      const { url, state, codeVerifier } = await buildYouTubeAuthUrl();
+      await prepareOAuthState('youtube', state, codeVerifier);
+      if (isTauriAvailable()) {
+        await openExternalAuth(url);
+      } else {
+        window.location.href = url;
+      }
+      toast({ title: "YouTube Authentication", description: "Complete authentication in the browser window." });
+    } catch (error) {
+      console.error("YouTube auth failed to start:", error);
+      toast({ title: "Authentication Error", description: "Failed to open YouTube authentication page", variant: "destructive" });
     }
-    toast({ title: "YouTube Authentication", description: "Complete authentication in the popup window." });
   }, [toast]);
 
-  const resetAuth = useCallback(() => {
-    clearYoutubeOAuthToken();
+  const resetAuth = useCallback(async () => {
+    await clearYoutubeOAuthToken();
     logoutYoutube();
     toast({ title: "YouTube Authentication Reset", description: "Please log in again to reconnect YouTube." });
   }, [logoutYoutube, toast]);

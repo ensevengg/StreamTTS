@@ -25,9 +25,10 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://id.twitch.tv https://accounts.google.com https://www.googleapis.com https://api.twitch.tv https://api.elevenlabs.io https://mananjk.github.io http://localhost:3000 ws://localhost:3000 ws://localhost:8080"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://api.twitch.tv https://www.googleapis.com https://api.elevenlabs.io wss://irc-ws.chat.twitch.tv; object-src 'none'; base-uri 'none'; form-action 'self'"
     },
-    "withGlobalTauri": true
+
+    "withGlobalTauri": false
   },
   "bundle": {
     "active": true,

@@ -1,30 +1,48 @@
 import { Client } from 'tmi.js';
+import { invoke } from '@tauri-apps/api/core';
 import { TWITCH_CLIENT_ID } from '@/config/security';
+import { secureGet, secureSet, secureDelete } from '@/lib/secureStorage';
+import { isTauriAvailable } from '@/lib/tauri-api';
 
 type MessageCallback = (username: string, message: string) => void;
 type ConnectionCallback = (connected: boolean, error?: string) => void;
 
-const TWITCH_TOKEN_KEY = 'twitchOAuthToken';
-const TWITCH_TOKEN_TIMESTAMP_KEY = 'twitchOAuthTokenTimestamp';
-const TOKEN_STALE_THRESHOLD_MS = 60 * 60 * 1000;
+// Stored in the OS keychain (localStorage only outside the desktop app).
+const TWITCH_TOKEN_KEY = 'twitch_oauth_token';
+const TOKEN_EXPIRY_BUFFER_MS = 10 * 60 * 1000;
 
 interface TwitchTokenInfo {
   token: string;
+  /** Present for authorization-code tokens; implicit tokens had none. */
+  refresh_token?: string;
+  /** Epoch ms when the access token expires, if known. */
+  expires_at?: number;
   timestamp: number;
 }
 
-export const saveTwitchOAuthToken = (token: string): void => {
-  try {
-    const tokenInfo: TwitchTokenInfo = { token, timestamp: Date.now() };
-    localStorage.setItem(TWITCH_TOKEN_KEY, JSON.stringify(tokenInfo));
-  } catch (error) {
-    console.error("TwitchService: Error saving token:", error);
-  }
+interface TokenCommandResponse {
+  access_token: string;
+  refresh_token?: string | null;
+  expires_in: number;
+}
+
+export const saveTwitchOAuthToken = async (
+  token: string,
+  refreshToken?: string,
+  expiresIn?: number,
+): Promise<void> => {
+  const tokenInfo: TwitchTokenInfo = {
+    token,
+    refresh_token: refreshToken || undefined,
+    expires_at: expiresIn ? Date.now() + expiresIn * 1000 : undefined,
+    timestamp: Date.now(),
+  };
+  await secureSet(TWITCH_TOKEN_KEY, JSON.stringify(tokenInfo));
 };
 
-const getTwitchTokenInfo = (): TwitchTokenInfo | null => {
+export const getTwitchTokenInfo = async (): Promise<TwitchTokenInfo | null> => {
   try {
-    const stored = localStorage.getItem(TWITCH_TOKEN_KEY);
+    const stored = await secureGet(TWITCH_TOKEN_KEY);
     if (!stored) return null;
     const parsed = JSON.parse(stored);
     if (typeof parsed === 'string') return { token: parsed, timestamp: 0 };
@@ -35,29 +53,109 @@ const getTwitchTokenInfo = (): TwitchTokenInfo | null => {
   }
 };
 
-export const getTwitchOAuthToken = (): string | null => {
-  return getTwitchTokenInfo()?.token || null;
+export const getTwitchOAuthToken = async (): Promise<string | null> => {
+  return (await getTwitchTokenInfo())?.token || null;
 };
 
-export const isTwitchTokenStale = (): boolean => {
-  const tokenInfo = getTwitchTokenInfo();
-  if (!tokenInfo || tokenInfo.timestamp === 0) return true;
-  return Date.now() - tokenInfo.timestamp > TOKEN_STALE_THRESHOLD_MS;
+const isTokenExpiring = (info: TwitchTokenInfo): boolean => {
+  if (!info.expires_at) return false;
+  return Date.now() >= info.expires_at - TOKEN_EXPIRY_BUFFER_MS;
 };
 
-export const getTokenAgeMinutes = (): number | null => {
-  const tokenInfo = getTwitchTokenInfo();
-  if (!tokenInfo || tokenInfo.timestamp === 0) return null;
-  return Math.floor((Date.now() - tokenInfo.timestamp) / (60 * 1000));
+/**
+ * True when the token is missing or at/near expiry. Without a known expiry
+ * (legacy implicit tokens) it can only be judged by Helix validation.
+ */
+export const isTwitchTokenStale = async (): Promise<boolean> => {
+  const info = await getTwitchTokenInfo();
+  if (!info?.token) return true;
+  return isTokenExpiring(info);
+};
+
+export const getTokenAgeMinutes = async (): Promise<number | null> => {
+  const info = await getTwitchTokenInfo();
+  if (!info || info.timestamp === 0) return null;
+  return Math.floor((Date.now() - info.timestamp) / (60 * 1000));
+};
+
+export const clearTwitchOAuthToken = async (): Promise<void> => {
+  try {
+    await secureDelete(TWITCH_TOKEN_KEY);
+  } catch (error) {
+    console.error("TwitchService: Error clearing token:", error);
+  }
+};
+
+export const hasTwitchOAuthToken = async (): Promise<boolean> => {
+  try {
+    return !!(await getTwitchTokenInfo())?.token;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Refreshes the Twitch access token via the Rust backend. Returns the new
+ * token, or null when there is no refresh token, the desktop shell is
+ * missing, or the refresh grant was rejected.
+ */
+export const refreshTwitchToken = async (): Promise<string | null> => {
+  const info = await getTwitchTokenInfo();
+  if (!info?.refresh_token) {
+    return null;
+  }
+  if (!isTauriAvailable()) {
+    console.warn("TwitchService: Token refresh requires the StreamTTS desktop app");
+    return null;
+  }
+
+  try {
+    const data: TokenCommandResponse = await invoke('twitch_refresh_token', {
+      refreshToken: info.refresh_token,
+    });
+    await saveTwitchOAuthToken(
+      data.access_token,
+      data.refresh_token || info.refresh_token,
+      data.expires_in,
+    );
+    console.log("TwitchService: Token refreshed successfully");
+    return data.access_token;
+  } catch (error) {
+    const err = error as { kind?: string };
+    console.error("TwitchService: Token refresh failed", err);
+    if (err?.kind === 'invalid_grant' || err?.kind === 'invalid_client') {
+      console.log("TwitchService: Refresh token is invalid, clearing tokens");
+      await clearTwitchOAuthToken();
+    }
+    return null;
+  }
+};
+
+/**
+ * Returns a usable access token, refreshing first when the stored one is at
+ * or near expiry. Null means the user must re-authenticate.
+ */
+const getValidTwitchToken = async (): Promise<string | null> => {
+  const info = await getTwitchTokenInfo();
+  if (!info?.token) return null;
+
+  if (isTokenExpiring(info)) {
+    const refreshed = await refreshTwitchToken();
+    if (refreshed) return refreshed;
+    // Known-expired and refresh failed: force re-authentication.
+    if (info.expires_at && Date.now() >= info.expires_at) return null;
+  }
+
+  return info.token;
 };
 
 export const validateTwitchToken = async (): Promise<{ valid: boolean; username?: string; error?: string }> => {
   try {
-    const tokenInfo = getTwitchTokenInfo();
-    if (!tokenInfo) return { valid: false, error: 'No token stored' };
+    const token = await getTwitchOAuthToken();
+    if (!token) return { valid: false, error: 'No token stored' };
 
     const response = await fetch('https://api.twitch.tv/helix/users', {
-      headers: { 'Authorization': `Bearer ${tokenInfo.token}`, 'Client-Id': TWITCH_CLIENT_ID }
+      headers: { 'Authorization': `Bearer ${token}`, 'Client-Id': TWITCH_CLIENT_ID }
     });
 
     if (response.status === 401) return { valid: false, error: 'Token expired or revoked' };
@@ -73,26 +171,9 @@ export const validateTwitchToken = async (): Promise<{ valid: boolean; username?
   }
 };
 
-export const hasTwitchOAuthToken = (): boolean => {
-  try {
-    return !!getTwitchTokenInfo()?.token;
-  } catch {
-    return false;
-  }
-};
-
-export const clearTwitchOAuthToken = (): void => {
-  try {
-    localStorage.removeItem(TWITCH_TOKEN_KEY);
-    localStorage.removeItem(TWITCH_TOKEN_TIMESTAMP_KEY);
-  } catch (error) {
-    console.error("TwitchService: Error clearing token:", error);
-  }
-};
-
 export const getTwitchUsername = async (): Promise<string | null> => {
   try {
-    const token = getTwitchOAuthToken();
+    const token = await getValidTwitchToken();
     if (!token) return null;
 
     const response = await fetch('https://api.twitch.tv/helix/users', {
@@ -142,11 +223,11 @@ class TwitchConnectionManager {
     return true;
   }
 
-  connect(
+  async connect(
     channelName: string,
     onMessageReceived: MessageCallback,
     onConnectionChanged: ConnectionCallback
-  ): void {
+  ): Promise<void> {
     if (!isValidChannelName(channelName)) {
       onConnectionChanged(false, 'Invalid channel name. Use 2-25 alphanumeric characters or underscores.');
       return;
@@ -159,7 +240,7 @@ class TwitchConnectionManager {
     }
 
     try {
-      const token = getTwitchOAuthToken();
+      const token = await getValidTwitchToken();
       if (!token) {
         onConnectionChanged(false, 'Not authenticated with Twitch. Please connect using OAuth.');
         return;
@@ -198,8 +279,6 @@ class TwitchConnectionManager {
           this.clients.delete(channelName);
         }
       });
-
-      client.on('reconnect', () => {});
 
       client.connect()
         .then(() => this.clients.set(channelName, client))
@@ -297,24 +376,14 @@ class TwitchConnectionManager {
 
 const connectionManager = new TwitchConnectionManager();
 
-export { connectionManager as TwitchConnectionManager };
-
-export const connectToTwitchChat = (
+export const connectToTwitchChat = async (
   channelName: string,
   onMessageReceived: MessageCallback,
   onConnectionChanged: ConnectionCallback
-): void => {
-  connectionManager.connect(channelName, onMessageReceived, onConnectionChanged);
+): Promise<void> => {
+  await connectionManager.connect(channelName, onMessageReceived, onConnectionChanged);
 };
 
 export const disconnectFromTwitchChat = (channelName?: string): Promise<void> => {
   return connectionManager.disconnect(channelName);
-};
-
-export const isTwitchConnected = (channelName?: string): boolean => {
-  return connectionManager.isConnected(channelName);
-};
-
-export const disconnectAllTwitchClients = async (): Promise<void> => {
-  return connectionManager.disconnectAll();
 };

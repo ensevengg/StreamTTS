@@ -3,9 +3,11 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useEffect, useRef, lazy, Suspense } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAuthStore } from "./stores/authStore";
+import { migrateLegacyCredentials } from "./lib/secureStorage";
 import Loading from "./components/Loading";
 import { AlertService } from "./services/alertsService";
 import AlertNotification from "./components/AlertNotification";
@@ -26,16 +28,22 @@ const Index = lazy(() => import("./pages/Index"));
 const Login = lazy(() => import("./pages/Login"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
-// Protected route component that redirects to login if not authenticated
-// Auth state is hydrated synchronously in authStore so this check is accurate on first render.
+// Protected route component that redirects to login if not authenticated.
+// Auth state comes from the OS keychain and is hydrated asynchronously, so
+// routing waits for `hydrated` before deciding.
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const isTwitchAuthed = useAuthStore(s => s.isTwitchAuthed);
   const isYoutubeAuthed = useAuthStore(s => s.isYoutubeAuthed);
-  
+  const hydrated = useAuthStore(s => s.hydrated);
+
+  if (!hydrated) {
+    return <Loading message="Loading StreamTTS..." />;
+  }
+
   if (!isTwitchAuthed && !isYoutubeAuthed) {
     return <Navigate to="/login" replace />;
   }
-  
+
   return <Suspense fallback={<Loading message="Loading application..." />}>{children}</Suspense>;
 };
 
@@ -46,6 +54,19 @@ const App = () => {
   useEffect(() => {
     checkForUpdates();
   }, [checkForUpdates]);
+
+  // Move credentials from plaintext localStorage into the OS keychain, then
+  // hydrate auth state from the keychain before any routing decision.
+  useEffect(() => {
+    void (async () => {
+      try {
+        await migrateLegacyCredentials();
+      } catch (error) {
+        console.error('Failed to migrate legacy credentials:', error);
+      }
+      await useAuthStore.getState().hydrate();
+    })();
+  }, []);
 
   useEffect(() => {
     if (updateAvailable && !updateToastShown.current) {
@@ -79,6 +100,21 @@ const App = () => {
     } catch (error) {
       console.error('Failed to initialize alert service:', error);
     }
+  }, []);
+
+  // The Rust loopback OAuth server runs asynchronously; if it fails to bind
+  // (e.g. port 3000 is taken), login will silently fail without this signal.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<string>('oauth-server-error', (event) => {
+      toast.error("Login server failed to start", {
+        description: String(event.payload),
+        duration: 10000,
+      });
+    })
+      .then((fn) => { unlisten = fn; })
+      .catch(() => {});
+    return () => { unlisten?.(); };
   }, []);
 
   return (

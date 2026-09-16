@@ -1,18 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Twitch, Youtube, Heart } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import TwitchOAuthButton from '@/components/TwitchOAuthButton';
 import YouTubeOAuthButton from '@/components/YouTubeOAuthButton';
-import { hasTwitchOAuthToken } from '@/services/twitchService';
-import { hasYoutubeOAuthToken } from '@/services/youtubeService';
+import { useAuthStore } from '@/stores/authStore';
 
 const Login = () => {
-  const [isTwitchAuthed, setIsTwitchAuthed] = useState<boolean>(hasTwitchOAuthToken());
-  const [isYoutubeAuthed, setIsYoutubeAuthed] = useState<boolean>(hasYoutubeOAuthToken());
+  // Auth state lives in the authStore (hydrated from the OS keychain at app
+  // startup and updated by the OAuth callbacks). Keeping it in the store is
+  // what lets ProtectedRoute admit the user right after a fresh login.
+  const isTwitchAuthed = useAuthStore(s => s.isTwitchAuthed);
+  const isYoutubeAuthed = useAuthStore(s => s.isYoutubeAuthed);
+  const setTwitchAuth = useAuthStore(s => s.setTwitchAuth);
+  const setYoutubeAuth = useAuthStore(s => s.setYoutubeAuth);
   const navigate = useNavigate();
-  
+
   useEffect(() => {
     if (isTwitchAuthed || isYoutubeAuthed) {
       navigate('/');
@@ -56,7 +60,7 @@ const Login = () => {
                   <p className="text-sm text-muted-foreground mb-4">
                     Authorize to read chat messages from your channel
                   </p>
-                  <TwitchOAuthButton onAuthChange={setIsTwitchAuthed} />
+                  <TwitchOAuthButton onAuthChange={setTwitchAuth} />
                 </CardContent>
               </Card>
             </TabsContent>
@@ -71,7 +75,7 @@ const Login = () => {
                   <p className="text-sm text-muted-foreground mb-4">
                     Authorize to read live chat from your streams
                   </p>
-                  <YouTubeOAuthButton onAuthChange={setIsYoutubeAuthed} />
+                  <YouTubeOAuthButton onAuthChange={setYoutubeAuth} />
                 </CardContent>
               </Card>
             </TabsContent>

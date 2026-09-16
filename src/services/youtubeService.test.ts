@@ -34,29 +34,29 @@ describe('youtubeService token storage', () => {
     vi.clearAllMocks();
   });
 
-  it('round-trips tokens', () => {
+  it('round-trips tokens', async () => {
     const t = makeTokens();
-    saveYoutubeTokens(t);
-    expect(hasYoutubeOAuthToken()).toBe(true);
-    expect(getYoutubeOAuthToken()).toBe('ya29.abc');
-    expect(getStoredTokens()).toEqual(t);
+    await saveYoutubeTokens(t);
+    expect(await hasYoutubeOAuthToken()).toBe(true);
+    expect(await getYoutubeOAuthToken()).toBe('ya29.abc');
+    expect(await getStoredTokens()).toEqual(t);
   });
 
-  it('clear removes tokens', () => {
-    saveYoutubeTokens(makeTokens());
-    clearYoutubeOAuthToken();
-    expect(hasYoutubeOAuthToken()).toBe(false);
-    expect(getStoredTokens()).toBeNull();
+  it('clear removes tokens', async () => {
+    await saveYoutubeTokens(makeTokens());
+    await clearYoutubeOAuthToken();
+    expect(await hasYoutubeOAuthToken()).toBe(false);
+    expect(await getStoredTokens()).toBeNull();
   });
 
-  it('returns null when nothing stored', () => {
-    expect(getStoredTokens()).toBeNull();
-    expect(hasYoutubeOAuthToken()).toBe(false);
-    expect(getYoutubeOAuthToken()).toBeNull();
+  it('returns null when nothing stored', async () => {
+    expect(await getStoredTokens()).toBeNull();
+    expect(await hasYoutubeOAuthToken()).toBe(false);
+    expect(await getYoutubeOAuthToken()).toBeNull();
   });
 
   it('getValidYoutubeToken returns token when fresh', async () => {
-    saveYoutubeTokens(makeTokens({ expires_at: Date.now() + 3600 * 1000 }));
+    await saveYoutubeTokens(makeTokens({ expires_at: Date.now() + 3600 * 1000 }));
     const t = await getValidYoutubeToken();
     expect(t).toBe('ya29.abc');
   });
@@ -65,16 +65,16 @@ describe('youtubeService token storage', () => {
     expect(await getValidYoutubeToken()).toBeNull();
   });
 
-  it('survives corrupted localStorage', () => {
+  it('survives corrupted storage', async () => {
     localStorageMock.setItem('youtube_oauth_tokens', '{bad');
-    expect(getStoredTokens()).toBeNull();
-    expect(hasYoutubeOAuthToken()).toBe(false);
-    expect(getYoutubeOAuthToken()).toBeNull();
+    expect(await getStoredTokens()).toBeNull();
+    expect(await hasYoutubeOAuthToken()).toBe(false);
+    expect(await getYoutubeOAuthToken()).toBeNull();
   });
 
-  it('survives token with empty access_token', () => {
-    saveYoutubeTokens(makeTokens({ access_token: '' }));
-    expect(hasYoutubeOAuthToken()).toBe(false);
+  it('survives token with empty access_token', async () => {
+    await saveYoutubeTokens(makeTokens({ access_token: '' }));
+    expect(await hasYoutubeOAuthToken()).toBe(false);
   });
 });
 

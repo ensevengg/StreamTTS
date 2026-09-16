@@ -63,6 +63,17 @@ const AlertNotification: React.FC<AlertNotificationProps> = ({ className }) => {
     }
   };
 
+  const getPlatformAccent = (platform: string) => {
+    switch (platform) {
+      case 'twitch':
+        return '#a855f7';
+      case 'youtube':
+        return '#ef4444';
+      default:
+        return '#3b82f6';
+    }
+  };
+
   const getAlertIcon = (alertType: string) => {
     switch (alertType) {
       case 'sub':
@@ -103,7 +114,7 @@ const AlertNotification: React.FC<AlertNotificationProps> = ({ className }) => {
         <Card
           key={alert.id}
           className="w-80 p-4 shadow-lg border-l-4 animate-in slide-in-from-right"
-          style={{ borderLeftColor: getPlatformColor(alert.platform).replace('bg-', '#').replace('500', '500') }}
+          style={{ borderLeftColor: getPlatformAccent(alert.platform) }}
         >
           <div className="flex items-start justify-between">
             <div className="flex items-start space-x-3 flex-1">

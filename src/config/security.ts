@@ -6,7 +6,9 @@ export const TTS_COMMAND_PREFIX = '!г';
 const TWITCH_CLIENT_ID_ENV = import.meta.env.VITE_TWITCH_CLIENT_ID;
 const YOUTUBE_CLIENT_ID_ENV = import.meta.env.VITE_YOUTUBE_CLIENT_ID;
 
-export const OAUTH_REDIRECT_URI = 'http://localhost:3000/callback';
+// The OAuth redirect URI is owned by the Rust backend and exposed to the
+// webview via the `oauth_redirect_uri` command (see src/lib/oauth-utils.ts)
+// so the callback address lives in exactly one place.
 
 function assertClientId(label: string, value: string): string {
   if (!value) {
@@ -31,6 +33,28 @@ export const hasYoutubeClientId = !!YOUTUBE_CLIENT_ID;
 
 const STATE_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 const STATE_KEY = 'oauth_state_storage';
+
+const base64UrlEncode = (bytes: Uint8Array): string => {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+
+/**
+ * PKCE pair for authorization-code flows. The challenge travels in the
+ * authorize URL (public by design); the verifier is registered with the Rust
+ * backend via `oauth_begin` and never passes through the browser.
+ */
+export const generatePkcePair = async (): Promise<{ verifier: string; challenge: string }> => {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  const verifier = base64UrlEncode(bytes);
+
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  const challenge = base64UrlEncode(new Uint8Array(digest));
+
+  return { verifier, challenge };
+};
 
 interface StoredState {
   nonce: string;

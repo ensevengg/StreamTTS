@@ -2,9 +2,9 @@ import React from 'react';
 import { Button } from '@/components/ui/button';
 import { Twitch, CheckCircle, AlertCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { saveTwitchOAuthToken, hasTwitchOAuthToken, clearTwitchOAuthToken, validateTwitchToken, isTwitchTokenStale, getTokenAgeMinutes } from '@/services/twitchService';
+import { saveTwitchOAuthToken, hasTwitchOAuthToken, clearTwitchOAuthToken, validateTwitchToken, isTwitchTokenStale, refreshTwitchToken, getTwitchTokenInfo } from '@/services/twitchService';
 import { openExternalAuth, onAuthCallback, type AuthCallbackData, isTauriAvailable } from '@/lib/tauri-api';
-import { TWITCH_CLIENT_ID, OAUTH_REDIRECT_URI, generateOAuthState, validateOAuthState } from '@/config/security';
+import { buildTwitchAuthUrl, prepareOAuthState } from '@/lib/oauth-utils';
 
 interface TwitchOAuthButtonProps {
   onAuthChange: (isAuthed: boolean) => void;
@@ -12,35 +12,38 @@ interface TwitchOAuthButtonProps {
 
 const TwitchOAuthButton: React.FC<TwitchOAuthButtonProps> = ({ onAuthChange }) => {
   const { toast } = useToast();
-  const [isAuthorized, setIsAuthorized] = React.useState<boolean>(hasTwitchOAuthToken());
+  const [isAuthorized, setIsAuthorized] = React.useState<boolean>(false);
   const [isAuthenticating, setIsAuthenticating] = React.useState<boolean>(false);
   const [tokenStatus, setTokenStatus] = React.useState<'valid' | 'stale' | 'invalid' | 'checking'>('valid');
   const pendingStateRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
-    if (!hasTwitchOAuthToken()) {
-      return;
-    }
-
     const validateToken = async () => {
-      setTokenStatus('checking');
-      
-      if (isTwitchTokenStale()) {
-        const ageMinutes = getTokenAgeMinutes();
-        console.log("TwitchService: Token is stale (age:", ageMinutes, "minutes), validating...");
+      const info = await getTwitchTokenInfo();
+      if (!info?.token) {
+        return;
       }
-      
+
+      setTokenStatus('checking');
+
+      // Authorization-code tokens are short-lived; refresh proactively when
+      // the stored one is at or near expiry.
+      if (await isTwitchTokenStale()) {
+        await refreshTwitchToken();
+      }
+
       const result = await validateTwitchToken();
-      
+
       if (result.valid) {
-        setTokenStatus('valid');
+        const stillStale = await isTwitchTokenStale();
+        setTokenStatus(stillStale ? 'stale' : 'valid');
       } else {
         console.log("TwitchService: Token validation failed:", result.error);
         setTokenStatus('invalid');
-        clearTwitchOAuthToken();
+        await clearTwitchOAuthToken();
         setIsAuthorized(false);
         onAuthChange(false);
-        
+
         toast({
           title: "Twitch Session Expired",
           description: "Your Twitch authentication has expired. Please reconnect.",
@@ -50,152 +53,91 @@ const TwitchOAuthButton: React.FC<TwitchOAuthButtonProps> = ({ onAuthChange }) =
     };
 
     validateToken();
-    
+
     const intervalId = setInterval(validateToken, 5 * 60 * 1000);
-    
+
     return () => clearInterval(intervalId);
   }, [onAuthChange, toast]);
 
   React.useEffect(() => {
-    const syncTokenState = () => {
-      const hasToken = hasTwitchOAuthToken();
+    const syncTokenState = async () => {
+      const hasToken = await hasTwitchOAuthToken();
       if (hasToken !== isAuthorized) {
         setIsAuthorized(hasToken);
         onAuthChange(hasToken);
       }
-      if (hasToken && isTwitchTokenStale()) {
-        setTokenStatus('stale');
+      if (hasToken && await isTwitchTokenStale()) {
+        setTokenStatus((current) => (current === 'valid' ? 'stale' : current));
       }
     };
 
-    syncTokenState();
+    void syncTokenState();
 
     window.addEventListener('storage', syncTokenState);
     return () => window.removeEventListener('storage', syncTokenState);
   }, [isAuthorized, onAuthChange]);
 
   React.useEffect(() => {
-    // Check if we're returning from auth redirect
-    const hash = window.location.hash;
-    if (hash) {
-      const params = new URLSearchParams(hash.substring(1));
-      const accessToken = params.get('access_token');
-      
-      if (accessToken) {
-        saveTwitchOAuthToken(accessToken);
-        setIsAuthorized(true);
-        onAuthChange(true);
-        
-        // Clear the URL fragment
-        window.history.pushState("", document.title, window.location.pathname + window.location.search);
-        
-        toast({
-          title: "Twitch Authentication Successful",
-          description: "You can now connect to your Twitch channels"
-        });
-      }
-    }
+    const unlistenAuth = onAuthCallback((data: AuthCallbackData) => {
+      if (data.type !== 'twitch-oauth-callback') return;
 
-    // Handle Electron/Tauri IPC events
-    const handleAuthCallback = (event: MessageEvent) => {
-      if (event.data && event.data.state && pendingStateRef.current) {
-        if (!validateOAuthState(event.data.state)) {
-          console.error('TwitchOAuthButton: CSRF state validation failed');
-          setIsAuthenticating(false);
-          toast({
-            title: "Security Error",
-            description: "OAuth state validation failed. Please try again.",
-            variant: "destructive"
-          });
-          return;
-        }
-        pendingStateRef.current = null;
-      }
-
-      if (event.data && event.data.type === 'twitch-oauth-callback' && event.data.token) {
-        saveTwitchOAuthToken(event.data.token);
-        setIsAuthorized(true);
-        onAuthChange(true);
+      if (pendingStateRef.current && data.state !== pendingStateRef.current) {
+        console.error('TwitchOAuthButton: OAuth state mismatch - possible CSRF attack');
         setIsAuthenticating(false);
-        
         toast({
-          title: "Twitch Authentication Successful",
-          description: "You can now connect to your Twitch channels"
-        });
-      } else if (event.data && event.data.error) {
-        console.error("Auth error from IPC:", event.data.error);
-        setIsAuthenticating(false);
-        
-        toast({
-          title: "Authentication Failed",
-          description: `Twitch error: ${event.data.error}`,
+          title: "Security Error",
+          description: "OAuth state validation failed. Please try again.",
           variant: "destructive"
         });
+        return;
       }
-    };
 
-    // Add event listener for Electron/Tauri auth callbacks
-    window.addEventListener('message', handleAuthCallback);
-    
-    // Setup listener for Tauri auth callbacks
-    const unlistenAuth = onAuthCallback((data) => {
-      if (data.type === 'twitch-oauth-callback') {
-        if (data.token) {
-          saveTwitchOAuthToken(data.token);
+      if (data.token) {
+        pendingStateRef.current = null;
+        void saveTwitchOAuthToken(data.token, data.refresh_token, data.expires_in).then(() => {
           setIsAuthorized(true);
           onAuthChange(true);
           setIsAuthenticating(false);
-          
+
           toast({
             title: "Twitch Authentication Successful",
             description: "You can now connect to your Twitch channels"
           });
-        } else if (data.error) {
-          console.error("Auth error from Tauri:", data.error);
-          setIsAuthenticating(false);
-          
-          toast({
-            title: "Authentication Failed",
-            description: `Twitch error: ${data.error}`,
-            variant: "destructive"
-          });
-        }
+        });
+      } else if (data.error) {
+        pendingStateRef.current = null;
+        console.error("Auth error from Tauri:", data.error);
+        setIsAuthenticating(false);
+
+        toast({
+          title: "Authentication Failed",
+          description: `Twitch error: ${data.error}`,
+          variant: "destructive"
+        });
       }
     });
-    
+
     return () => {
-      window.removeEventListener('message', handleAuthCallback);
       unlistenAuth();
     };
   }, [onAuthChange, toast]);
- 
+
   const handleConnect = async () => {
     setIsAuthenticating(true);
-    
-    // Twitch OAuth implicit flow
-    const scopes = ['chat:read', 'chat:edit'];
-    const authUrl = new URL('https://id.twitch.tv/oauth2/authorize');
-    authUrl.searchParams.append('client_id', TWITCH_CLIENT_ID);
-    
-    authUrl.searchParams.append('redirect_uri', OAUTH_REDIRECT_URI);
 
-    authUrl.searchParams.append('response_type', 'token');
-    authUrl.searchParams.append('scope', scopes.join(' '));
-    authUrl.searchParams.append('force_verify', 'true');
-    const state = generateOAuthState('twitch');
-    pendingStateRef.current = state;
-    authUrl.searchParams.append('state', state);
-    
-    const fullAuthUrl = authUrl.toString();
-    
-    // Check if we're running in Electron/Tauri
     if (isTauriAvailable()) {
       try {
-        await openExternalAuth(fullAuthUrl, OAUTH_REDIRECT_URI);
+        const { url, state, codeVerifier } = await buildTwitchAuthUrl();
+        pendingStateRef.current = state;
+        // Register the state (and PKCE verifier) with the backend before the
+        // browser flow starts, so the loopback callback can consume it once.
+        await prepareOAuthState('twitch', state, codeVerifier);
+        await openExternalAuth(url);
       } catch (error) {
+        pendingStateRef.current = null;
         console.error("Twitch Auth: Error opening auth URL:", error);
         setIsAuthenticating(false);
-        
+
         toast({
           title: "Authentication Error",
           description: "Failed to open Twitch authentication page",
@@ -203,16 +145,22 @@ const TwitchOAuthButton: React.FC<TwitchOAuthButtonProps> = ({ onAuthChange }) =
         });
       }
     } else {
-      // Fallback to web flow
-      window.location.href = fullAuthUrl;
+      try {
+        const { url, state } = await buildTwitchAuthUrl();
+        pendingStateRef.current = state;
+        window.location.href = url;
+      } catch (error) {
+        console.error("Twitch Auth: Failed to build auth URL:", error);
+        setIsAuthenticating(false);
+      }
     }
   };
 
-  const handleDisconnect = () => {
-    clearTwitchOAuthToken();
+  const handleDisconnect = async () => {
+    await clearTwitchOAuthToken();
     setIsAuthorized(false);
     onAuthChange(false);
-    
+
     toast({
       title: "Twitch Disconnected",
       description: "You've been logged out of Twitch"
@@ -223,8 +171,8 @@ const TwitchOAuthButton: React.FC<TwitchOAuthButtonProps> = ({ onAuthChange }) =
     <div className="flex flex-col space-y-2">
       {isAuthorized ? (
         <>
-          <Button 
-            variant="outline" 
+          <Button
+            variant="outline"
             className={`text-white w-full ${
               tokenStatus === 'invalid' ? 'bg-red-500 hover:bg-red-600' :
               tokenStatus === 'stale' ? 'bg-yellow-500 hover:bg-yellow-600' :
@@ -243,8 +191,8 @@ const TwitchOAuthButton: React.FC<TwitchOAuthButtonProps> = ({ onAuthChange }) =
              'Connected to Twitch'}
           </Button>
           {(tokenStatus === 'stale' || tokenStatus === 'invalid') && (
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               className="bg-purple-500 text-white hover:bg-purple-600 w-full"
               onClick={handleConnect}
               disabled={isAuthenticating}
@@ -255,8 +203,8 @@ const TwitchOAuthButton: React.FC<TwitchOAuthButtonProps> = ({ onAuthChange }) =
           )}
         </>
       ) : (
-        <Button 
-          variant="outline" 
+        <Button
+          variant="outline"
           className={`${isAuthenticating ? 'bg-yellow-500' : 'bg-purple-500'} text-white hover:bg-purple-600 w-full`}
           onClick={handleConnect}
           disabled={isAuthenticating}
@@ -266,9 +214,9 @@ const TwitchOAuthButton: React.FC<TwitchOAuthButtonProps> = ({ onAuthChange }) =
         </Button>
       )}
       <p className="text-xs text-muted-foreground">
-        {isAuthorized 
-          ? tokenStatus === 'stale' 
-            ? "Token may be stale. Consider reconnecting for best reliability." 
+        {isAuthorized
+          ? tokenStatus === 'stale'
+            ? "Token may be stale. Consider reconnecting for best reliability."
             : tokenStatus === 'invalid'
               ? "Your session has expired. Please reconnect."
               : "Authorized with Twitch. You can now connect to channels."

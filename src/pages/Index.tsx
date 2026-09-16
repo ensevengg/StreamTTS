@@ -24,12 +24,24 @@ import { getAvailableBrowserVoices } from '@/services/ttsService';
 import { useChatStore } from '@/stores/chatStore';
 import { useSettingsStore, TTSProvider } from '@/stores/settingsStore';
 import { useTtsQueue } from '@/hooks/useTtsQueue';
+import { useAuthStore } from '@/stores/authStore';
+import { useOAuthCallback } from '@/hooks/useOAuthCallback';
 
 const Index = () => {
   const { toast } = useToast();
   const [isHowToUseOpen, setIsHowToUseOpen] = useState<boolean>(false);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [ttsInitialized, setTtsInitialized] = useState<boolean>(false);
+
+  // Mounted here (not inside a tab) so the auth-callback listener stays alive
+  // no matter which tab is active while the OAuth browser window is open.
+  const setTwitchAuth = useAuthStore(s => s.setTwitchAuth);
+  const setYoutubeAuth = useAuthStore(s => s.setYoutubeAuth);
+  useOAuthCallback({
+    onTwitchAuth: useCallback(() => setTwitchAuth(true), [setTwitchAuth]),
+    onYoutubeAuth: useCallback(() => setYoutubeAuth(true), [setYoutubeAuth]),
+    toast,
+  });
 
   const messages = useChatStore(s => s.messages);
   const activeTab = useChatStore(s => s.activeTab);
