@@ -10,7 +10,7 @@
 - **Read-only logins** — Twitch `chat:read` plus read-only sub/redemption scopes; YouTube `youtube.readonly` only
 - **Survives stream trouble** — chat reconnects on its own after network drops, Twitch maintenance and YouTube stream crashes
 - **Dual TTS Engine** — Browser Web Speech API (free, unlimited) or ElevenLabs (premium)
-- **`!г` Command Prefix** — read specific messages aloud; designed for Russian-language communities
+- **`!г` and `!r` commands** — viewers start a message with `!г` to have it read in Russian or `!r` for English, each with its own voice
 - **Viewer limits** — per-viewer cooldown, message length cap, links read as "link", Skip and Clear queue
 - **Alerts** — Twitch subs, gifted subs and channel points (EventSub WebSocket); YouTube Super Chats and memberships
 - **Privacy-First** — tokens and settings in the OS keychain; no telemetry, no analytics

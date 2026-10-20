@@ -1,5 +1,4 @@
 import { toast } from '@/hooks/use-toast';
-import { TTS_COMMAND_PREFIX } from '@/config/constants';
 import { useAuthStore } from '@/stores/authStore';
 import { useChatStore } from '@/stores/chatStore';
 import { AlertService } from '@/services/alertsService';
@@ -35,7 +34,7 @@ let youtube: YouTubeChatSession | null = null;
 function receiveChatMessage(platform: ChatPlatform, id: string, username: string, text: string): void {
   const message = { id: `${platform}-${id}`, content: text, timestamp: Date.now(), username };
   useChatStore.getState().addMessage(message);
-  if (text.startsWith(TTS_COMMAND_PREFIX)) speakChatMessage(message, { fromViewer: true });
+  speakChatMessage(message, { fromViewer: true });
 }
 
 /** Toasts on the transitions that matter, not on every retry. */

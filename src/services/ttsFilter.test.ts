@@ -1,9 +1,37 @@
 import { describe, it, expect } from 'vitest';
-import { CooldownTracker, prepareSpeechText, stripCommandPrefix } from './ttsFilter';
+import { CooldownTracker, parseTtsCommand, prepareSpeechText, stripCommandPrefix } from './ttsFilter';
+
+describe('parseTtsCommand', () => {
+  it('reads !г in Russian and !r in English', () => {
+    expect(parseTtsCommand('!г Привет')).toEqual({ language: 'ru', text: 'Привет' });
+    expect(parseTtsCommand('!r Hello there')).toEqual({ language: 'en', text: 'Hello there' });
+  });
+
+  it('ignores case and surrounding spaces', () => {
+    expect(parseTtsCommand('!Г  Привет')).toEqual({ language: 'ru', text: 'Привет' });
+    expect(parseTtsCommand('  !R hello')).toEqual({ language: 'en', text: 'hello' });
+  });
+
+  it('does not fire on other commands that start the same way', () => {
+    for (const message of ['!rules', '!raid now', '!rank', '!гг', '!rHello']) {
+      expect(parseTtsCommand(message)).toBeNull();
+    }
+  });
+
+  it('needs the command at the start', () => {
+    expect(parseTtsCommand('hello !r there')).toBeNull();
+    expect(parseTtsCommand('Привет')).toBeNull();
+  });
+
+  it('accepts a bare command, with nothing to read', () => {
+    expect(parseTtsCommand('!r')).toEqual({ language: 'en', text: '' });
+  });
+});
 
 describe('stripCommandPrefix', () => {
   it('removes the command and following space', () => {
     expect(stripCommandPrefix('!г Привет')).toBe('Привет');
+    expect(stripCommandPrefix('!r Hello')).toBe('Hello');
     expect(stripCommandPrefix('Привет')).toBe('Привет');
   });
 });

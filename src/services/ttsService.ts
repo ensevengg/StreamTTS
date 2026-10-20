@@ -1,3 +1,4 @@
+import type { SpeechLanguage } from '@/config/constants';
 import type { TTSProvider } from '@/stores/settingsStore';
 
 const DEFAULT_VOICE_ID = 'IKne3meq5aSn9XLyUdCD';
@@ -8,6 +9,8 @@ export interface SpeakOptions {
   provider: TTSProvider;
   apiKey: string;
   volume: number;
+  language: SpeechLanguage;
+  /** Browser voice to use; when unset or missing, one for `language` is picked. */
   voiceName?: string;
   /** Aborting stops playback and rejects with an AbortError. */
   signal: AbortSignal;
@@ -23,13 +26,31 @@ const abortError = () => new DOMException('Speech was skipped', 'AbortError');
 const browserSpeechTimeoutMs = (text: string): number =>
   Math.min(90_000, 10_000 + text.length * 150);
 
-function pickVoice(voices: SpeechSynthesisVoice[], voiceName?: string): SpeechSynthesisVoice | undefined {
-  if (voiceName) return voices.find(v => v.name === voiceName);
-  return voices.find(v => v.name.includes('Pavel'))
-    ?? voices.find(v => v.lang.startsWith('ru') || v.name.includes('Russian') || v.name.includes('русский'));
+const SPEECH_LOCALES: Record<SpeechLanguage, string> = { ru: 'ru-RU', en: 'en-US' };
+
+const speaks = (voice: SpeechSynthesisVoice, language: SpeechLanguage): boolean =>
+  voice.lang.toLowerCase().startsWith(language);
+
+/** The voice used for `language` until the streamer picks one. */
+export function defaultVoiceFor(
+  voices: SpeechSynthesisVoice[],
+  language: SpeechLanguage,
+): SpeechSynthesisVoice | undefined {
+  if (language === 'ru') {
+    return voices.find(v => v.name.includes('Pavel'))
+      ?? voices.find(v => speaks(v, 'ru') || v.name.includes('Russian') || v.name.includes('русский'));
+  }
+  const matching = voices.filter(v => speaks(v, language));
+  return matching.find(v => v.default)
+    ?? matching.find(v => v.lang.toLowerCase().replace('_', '-') === SPEECH_LOCALES[language].toLowerCase())
+    ?? matching[0];
 }
 
-function speakWithBrowser(text: string, { volume, voiceName, signal }: SpeakOptions): Promise<void> {
+function pickVoice(voices: SpeechSynthesisVoice[], voiceName: string | undefined, language: SpeechLanguage) {
+  return (voiceName ? voices.find(v => v.name === voiceName) : undefined) ?? defaultVoiceFor(voices, language);
+}
+
+function speakWithBrowser(text: string, { volume, language, voiceName, signal }: SpeakOptions): Promise<void> {
   return new Promise((resolve, reject) => {
     if (!('speechSynthesis' in window)) {
       reject(new Error('Speech synthesis is not available in this system webview.'));
@@ -41,7 +62,10 @@ function speakWithBrowser(text: string, { volume, voiceName, signal }: SpeakOpti
 
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.volume = volume;
-    const voice = pickVoice(synth.getVoices(), voiceName);
+    // Without a matching voice installed, the language still tells the
+    // engine how to pronounce the text.
+    utterance.lang = SPEECH_LOCALES[language];
+    const voice = pickVoice(synth.getVoices(), voiceName, language);
     if (voice) utterance.voice = voice;
 
     let settled = false;

@@ -12,7 +12,10 @@ const settingsSchema = z.object({
   apiKey: z.string(),
   volume: z.number().min(0).max(1),
   ttsProvider: z.enum(['browser', 'elevenlabs']),
+  /** Browser voice for `!г` (Russian) messages. */
   selectedVoice: z.string(),
+  /** Browser voice for `!r` (English) messages and alerts. */
+  englishVoice: z.string(),
   ttsMaxLength: z.number().int().min(TTS_MAX_LENGTH_RANGE.min).max(TTS_MAX_LENGTH_RANGE.max),
   ttsViewerCooldownSec: z.number().int().min(TTS_COOLDOWN_RANGE_SEC.min).max(TTS_COOLDOWN_RANGE_SEC.max),
 });
@@ -24,6 +27,7 @@ interface SettingsState extends Settings {
   setVolume: (volume: number) => void;
   setTtsProvider: (provider: TTSProvider) => void;
   setSelectedVoice: (voice: string) => void;
+  setEnglishVoice: (voice: string) => void;
   setTtsMaxLength: (length: number) => void;
   setTtsViewerCooldownSec: (seconds: number) => void;
 }
@@ -33,6 +37,7 @@ const defaults: Settings = {
   volume: 0.7,
   ttsProvider: 'browser',
   selectedVoice: '',
+  englishVoice: '',
   ttsMaxLength: 200,
   ttsViewerCooldownSec: 10,
 };
@@ -62,6 +67,7 @@ export const useSettingsStore = create<SettingsState>()(
       setVolume: (volume) => set({ volume }),
       setTtsProvider: (ttsProvider) => set({ ttsProvider }),
       setSelectedVoice: (selectedVoice) => set({ selectedVoice }),
+      setEnglishVoice: (englishVoice) => set({ englishVoice }),
       setTtsMaxLength: (ttsMaxLength) => set({ ttsMaxLength }),
       setTtsViewerCooldownSec: (ttsViewerCooldownSec) => set({ ttsViewerCooldownSec }),
     }),

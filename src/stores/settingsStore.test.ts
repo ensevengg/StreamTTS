@@ -6,6 +6,7 @@ const current = {
   volume: 0.7,
   ttsProvider: 'browser' as const,
   selectedVoice: '',
+  englishVoice: '',
   ttsMaxLength: 200,
   ttsViewerCooldownSec: 10,
 };

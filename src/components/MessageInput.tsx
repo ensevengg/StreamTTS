@@ -3,7 +3,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Send, Volume2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { TTS_COMMAND_PREFIX } from '@/config/constants';
+import { parseTtsCommand } from '@/services/ttsFilter';
 
 interface MessageInputProps {
   onSendMessage: (message: string) => void;
@@ -21,13 +21,13 @@ const MessageInput: React.FC<MessageInputProps> = ({ onSendMessage, ttsProvider 
       return;
     }
     
-    if (message.startsWith(`${TTS_COMMAND_PREFIX} `)) {
+    if (parseTtsCommand(message)?.text.trim()) {
       onSendMessage(message);
       setMessage('');
     } else {
       toast({
         title: "TTS command required",
-        description: `Start with ${TTS_COMMAND_PREFIX} to have this message read aloud`,
+        description: 'Start with !г (Russian) or !r (English) to have this message read aloud',
         variant: "destructive"
       });
     }
@@ -42,7 +42,7 @@ const MessageInput: React.FC<MessageInputProps> = ({ onSendMessage, ttsProvider 
         <Input 
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          placeholder={`Start with ${TTS_COMMAND_PREFIX} to read message aloud... (${ttsProvider === 'browser' ? 'Browser TTS' : 'ElevenLabs'})`}
+          placeholder={`Start with !г or !r to read message aloud... (${ttsProvider === 'browser' ? 'Browser TTS' : 'ElevenLabs'})`}
           className="pl-10 bg-muted border-stream-accent/30 focus:border-stream-accent focus-visible:ring-stream-accent/50"
         />
       </div>

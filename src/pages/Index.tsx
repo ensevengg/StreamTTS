@@ -8,9 +8,9 @@ import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import VoiceSelect from '@/components/VoiceSelect';
 
 // Lazy load components with prefetch to avoid UI jank
 const MessageInput = lazy(() => import('@/components/MessageInput'));
@@ -22,8 +22,7 @@ const ConnectionStatusPanel = lazy(() => import('@/components/ConnectionStatusPa
 const AlertSettings = lazy(() => import('@/components/AlertSettings'));
 
 import { Message } from '@/types/message';
-import { TTS_COMMAND_PREFIX } from '@/config/constants';
-import { getAvailableBrowserVoices } from '@/services/ttsService';
+import { defaultVoiceFor, getAvailableBrowserVoices } from '@/services/ttsService';
 import { ttsQueueService } from '@/services/ttsQueueService';
 import { speakChatMessage } from '@/services/chatSpeech';
 import { useChatStore } from '@/stores/chatStore';
@@ -49,10 +48,12 @@ const Index = () => {
   const volume = useSettingsStore(s => s.volume);
   const ttsProvider = useSettingsStore(s => s.ttsProvider);
   const selectedVoice = useSettingsStore(s => s.selectedVoice);
+  const englishVoice = useSettingsStore(s => s.englishVoice);
   const setApiKey = useSettingsStore(s => s.setApiKey);
   const setVolume = useSettingsStore(s => s.setVolume);
   const setTtsProvider = useSettingsStore(s => s.setTtsProvider);
   const setSelectedVoice = useSettingsStore(s => s.setSelectedVoice);
+  const setEnglishVoice = useSettingsStore(s => s.setEnglishVoice);
   const ttsMaxLength = useSettingsStore(s => s.ttsMaxLength);
   const ttsViewerCooldownSec = useSettingsStore(s => s.ttsViewerCooldownSec);
   const setTtsMaxLength = useSettingsStore(s => s.setTtsMaxLength);
@@ -65,26 +66,14 @@ const Index = () => {
         setAvailableVoices(voices);
         
         if (!selectedVoice) {
-          const pavelVoice = voices.find(v => 
-            v.name.includes('Pavel') || 
-            v.name.includes('Microsoft Pavel')
-          );
-          
-          if (pavelVoice) {
-            setSelectedVoice(pavelVoice.name);
-          } else {
-            const russianVoice = voices.find(v => 
-              v.lang.startsWith('ru') || 
-              v.name.includes('Russian') || 
-              v.name.includes('русский')
-            );
-            
-            if (russianVoice) {
-              setSelectedVoice(russianVoice.name);
-            }
-          }
+          const voice = defaultVoiceFor(voices, 'ru');
+          if (voice) setSelectedVoice(voice.name);
         }
-        
+        if (!englishVoice) {
+          const voice = defaultVoiceFor(voices, 'en');
+          if (voice) setEnglishVoice(voice.name);
+        }
+
         setTtsInitialized(true);
       };
       
@@ -104,7 +93,7 @@ const Index = () => {
         }
       }
     }
-  }, [activeTab, ttsInitialized, selectedVoice, setSelectedVoice]);
+  }, [activeTab, ttsInitialized, selectedVoice, setSelectedVoice, englishVoice, setEnglishVoice]);
 
   const handleApiKeySubmit = useCallback((key: string) => {
     setApiKey(key);
@@ -136,10 +125,6 @@ const Index = () => {
         : "Using browser's built-in TTS (unlimited usage)"
     });
   }, [setTtsProvider, toast]);
-
-  const handleVoiceChange = useCallback((voice: string) => {
-    setSelectedVoice(voice);
-  }, [setSelectedVoice]);
 
   const handleSendMessage = useCallback((content: string) => {
     const newMessage: Message = {
@@ -255,24 +240,24 @@ const Index = () => {
                     </div>
                     
                     {ttsProvider === 'browser' && (
-                      <div className="rounded-lg border p-4">
-                        <h4 className="font-medium mb-2">Voice Selection</h4>
-                        <Select value={selectedVoice} onValueChange={handleVoiceChange}>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select a voice" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {availableVoices.map((voice) => (
-                              <SelectItem 
-                                key={voice.name} 
-                                value={voice.name}
-                              >
-                                {voice.name} {voice.lang ? `(${voice.lang})` : ''}
-                                {voice.lang && voice.lang.startsWith('ru') && ' - Recommended'}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                      <div className="rounded-lg border p-4 space-y-4">
+                        <h4 className="font-medium">Voice Selection</h4>
+                        <VoiceSelect
+                          id="voice-ru"
+                          label="Russian voice (!г)"
+                          language="ru"
+                          voices={availableVoices}
+                          value={selectedVoice}
+                          onChange={setSelectedVoice}
+                        />
+                        <VoiceSelect
+                          id="voice-en"
+                          label="English voice (!r and alerts)"
+                          language="en"
+                          voices={availableVoices}
+                          value={englishVoice}
+                          onChange={setEnglishVoice}
+                        />
                       </div>
                     )}
                     
@@ -333,16 +318,16 @@ const Index = () => {
                         <CollapsibleContent>
                           <CardContent className="space-y-3 text-sm">
                             <p>
-                              <span className="text-stream-accent font-semibold">1.</span> {ttsProvider === 'elevenlabs' ? 'Set your ElevenLabs API key above' : 'Select a voice from the dropdown above'}
+                              <span className="text-stream-accent font-semibold">1.</span> {ttsProvider === 'elevenlabs' ? 'Set your ElevenLabs API key above' : 'Pick a voice for each language above'}
                             </p>
                             <p>
                               <span className="text-stream-accent font-semibold">2.</span> Go to Connections and connect to Twitch or YouTube
                             </p>
                             <p>
-                              <span className="text-stream-accent font-semibold">3.</span> Messages starting with <code className="bg-muted px-1 rounded text-stream-accent">{TTS_COMMAND_PREFIX}</code> will be read aloud
+                              <span className="text-stream-accent font-semibold">3.</span> Messages starting with <code className="bg-muted px-1 rounded text-stream-accent">!г</code> are read aloud in Russian, and ones starting with <code className="bg-muted px-1 rounded text-stream-accent">!r</code> in English
                             </p>
                             <p className="text-muted-foreground italic mt-4">
-                              Example: <code className="bg-muted px-1 rounded text-stream-accent">{TTS_COMMAND_PREFIX} Привет!</code>
+                              Example: <code className="bg-muted px-1 rounded text-stream-accent">!г Привет!</code> or <code className="bg-muted px-1 rounded text-stream-accent">!r Hello!</code>
                             </p>
                           </CardContent>
                         </CollapsibleContent>

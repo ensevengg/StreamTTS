@@ -33,7 +33,7 @@ const ApiKeyInput: React.FC<ApiKeyInputProps> = ({ onApiKeySubmit, onApiKeyRemov
           ElevenLabs API Key
         </CardTitle>
         <CardDescription>
-          Enter your ElevenLabs API key to enable Russian text-to-speech
+          Enter your ElevenLabs API key to use its voices (Russian and English)
         </CardDescription>
       </CardHeader>
 

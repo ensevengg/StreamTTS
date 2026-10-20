@@ -1,6 +1,10 @@
-import { TTS_COMMAND_PREFIX } from '@/config/constants';
+import { TTS_COMMANDS, type SpeechLanguage } from '@/config/constants';
 
-const COMMAND_PREFIX_PATTERN = new RegExp(`^${TTS_COMMAND_PREFIX}\\s*`, 'i');
+// The command has to stand alone, so "!rules" or "!raid" aren't read aloud.
+const COMMAND_PATTERNS = TTS_COMMANDS.map(({ prefix, language }) => ({
+  language,
+  pattern: new RegExp(`^\\s*${prefix}(?:\\s+|$)`, 'iu'),
+}));
 const URL_PATTERN = /\b(?:https?:\/\/|www\.)\S+/gi;
 // Control characters plus zero-width and bidi-override characters, which can
 // hide text or flip how it renders in the chat history.
@@ -9,8 +13,23 @@ const INVISIBLE_PATTERN = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e
 // "aaaaaaaaaa" or "!!!!!!!!" spam: keep at most three in a row.
 const REPEAT_PATTERN = /(.)\1{3,}/gu;
 
+export interface TtsCommand {
+  language: SpeechLanguage;
+  /** The message without its command. */
+  text: string;
+}
+
+/** The read-aloud command a message starts with, or null if it has none. */
+export function parseTtsCommand(content: string): TtsCommand | null {
+  for (const { language, pattern } of COMMAND_PATTERNS) {
+    const match = pattern.exec(content);
+    if (match) return { language, text: content.slice(match[0].length) };
+  }
+  return null;
+}
+
 export const stripCommandPrefix = (content: string): string =>
-  content.replace(COMMAND_PREFIX_PATTERN, '');
+  parseTtsCommand(content)?.text ?? content;
 
 /**
  * Turns a chat message into what gets spoken: links become the word "link",

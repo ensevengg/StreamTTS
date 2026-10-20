@@ -2,7 +2,7 @@ import { toast } from '@/hooks/use-toast';
 import { useChatStore } from '@/stores/chatStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { ttsQueueService } from '@/services/ttsQueueService';
-import { CooldownTracker, prepareSpeechText, stripCommandPrefix } from '@/services/ttsFilter';
+import { CooldownTracker, parseTtsCommand, prepareSpeechText } from '@/services/ttsFilter';
 import type { AlertData } from '@/services/alertsService';
 import type { Message } from '@/types/message';
 
@@ -19,14 +19,17 @@ const reportSpeechError = (detail?: string): void => {
 };
 
 /**
- * Speaks a `!г` message. Viewer messages are subject to the per-viewer
- * cooldown and queue cap; messages the streamer types are not.
+ * Speaks a message that starts with a read-aloud command (`!г`, `!r`) in that
+ * command's language, and ignores any other message. Viewer messages are
+ * subject to the per-viewer cooldown and queue cap; the streamer's are not.
  */
 export function speakChatMessage(message: Message, { fromViewer }: { fromViewer: boolean }): void {
+  const command = parseTtsCommand(message.content);
+  if (!command) return;
   const { ttsMaxLength, ttsViewerCooldownSec } = useSettingsStore.getState();
   const { updateMessageStatus } = useChatStore.getState();
 
-  const text = prepareSpeechText(stripCommandPrefix(message.content), ttsMaxLength);
+  const text = prepareSpeechText(command.text, ttsMaxLength);
   if (!text) {
     updateMessageStatus(message.id, 'skipped', 'Nothing to read');
     return;
@@ -41,6 +44,7 @@ export function speakChatMessage(message: Message, { fromViewer }: { fromViewer:
   const accepted = ttsQueueService.enqueue({
     id: message.id,
     text,
+    language: command.language,
     owner: fromViewer ? viewer : undefined,
     onStatus: (status, detail) => {
       useChatStore.getState().updateMessageStatus(message.id, status, detail);
@@ -57,6 +61,8 @@ export function speakAlert(alert: AlertData, volume: number): void {
   ttsQueueService.enqueue({
     id: `alert-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     text,
+    // Alert texts are written in English (see eventToAlert, chatItemToAlert).
+    language: 'en',
     priority: true,
     volume,
     onStatus: (status, detail) => {

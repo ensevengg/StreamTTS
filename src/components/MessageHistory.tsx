@@ -3,7 +3,6 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Card } from '@/components/ui/card';
 import { Volume2, User } from 'lucide-react';
 import { Message } from '@/types/message';
-import { TTS_COMMAND_PREFIX } from '@/config/constants';
 import { stripCommandPrefix } from '@/services/ttsFilter';
 import { useChatStore } from '@/stores/chatStore';
 
@@ -66,8 +65,8 @@ const MessageHistory: React.FC = () => {
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
             <Volume2 size={40} className="mb-2 text-stream-accent/50" />
-            <p>No messages yet. Send a Russian message to get started!</p>
-            <p className="mt-2 text-sm">Example: {TTS_COMMAND_PREFIX} Привет, как дела?</p>
+            <p>No messages yet. Send a message to get started!</p>
+            <p className="mt-2 text-sm">Example: !г Привет, как дела? or !r Hello, how are you?</p>
           </div>
         ) : (
           <div className="space-y-4">

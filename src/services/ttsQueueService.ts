@@ -1,3 +1,4 @@
+import type { SpeechLanguage } from '@/config/constants';
 import { speak, type SpeakOptions } from '@/services/ttsService';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useChatStore } from '@/stores/chatStore';
@@ -8,6 +9,7 @@ export type SpeechJobStatus = 'playing' | 'completed' | 'skipped' | 'error';
 export interface SpeechJob {
   id: string;
   text: string;
+  language: SpeechLanguage;
   /** Viewer the job came from; caps how many one viewer can have waiting. */
   owner?: string;
   /** Alerts jump ahead of waiting chat messages. */
@@ -19,17 +21,27 @@ export interface SpeechJob {
 export const MAX_QUEUE_LENGTH = 50;
 export const MAX_QUEUED_PER_VIEWER = 3;
 
+type QueueSettings = Pick<SpeakOptions, 'provider' | 'apiKey' | 'volume'> & {
+  /** The browser voice chosen for each language, if any. */
+  voices: Partial<Record<SpeechLanguage, string>>;
+};
+
 interface QueueDeps {
   speak: (text: string, options: SpeakOptions) => Promise<void>;
-  getSettings: () => Pick<SpeakOptions, 'provider' | 'apiKey' | 'volume' | 'voiceName'>;
+  getSettings: () => QueueSettings;
   setProcessing: (processing: boolean) => void;
 }
 
 const defaultDeps: QueueDeps = {
   speak,
   getSettings: () => {
-    const { ttsProvider, apiKey, volume, selectedVoice } = useSettingsStore.getState();
-    return { provider: ttsProvider, apiKey, volume, voiceName: selectedVoice || undefined };
+    const { ttsProvider, apiKey, volume, selectedVoice, englishVoice } = useSettingsStore.getState();
+    return {
+      provider: ttsProvider,
+      apiKey,
+      volume,
+      voices: { ru: selectedVoice || undefined, en: englishVoice || undefined },
+    };
   },
   setProcessing: (processing) => useChatStore.getState().setIsProcessing(processing),
 };
@@ -94,11 +106,13 @@ export class TtsQueue {
         const controller = new AbortController();
         this.current = { job, controller };
         job.onStatus?.('playing');
-        const settings = this.deps.getSettings();
+        const { voices, ...settings } = this.deps.getSettings();
         try {
           await this.deps.speak(job.text, {
             ...settings,
             volume: job.volume ?? settings.volume,
+            language: job.language,
+            voiceName: voices[job.language],
             signal: controller.signal,
           });
           job.onStatus?.('completed');

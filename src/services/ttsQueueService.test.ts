@@ -24,7 +24,7 @@ function makeQueue(speak: (text: string, options: SpeakOptions) => Promise<void>
   const processing: boolean[] = [];
   const queue = new TtsQueue({
     speak,
-    getSettings: () => ({ provider: 'browser', apiKey: '', volume: 0.7, voiceName: undefined }),
+    getSettings: () => ({ provider: 'browser', apiKey: '', volume: 0.7, voices: { ru: 'Pavel', en: 'Zira' } }),
     setProcessing: (p) => processing.push(p),
   });
   return { queue, processing };
@@ -32,7 +32,7 @@ function makeQueue(speak: (text: string, options: SpeakOptions) => Promise<void>
 
 const job = (id: string, extra: Partial<SpeechJob> = {}): SpeechJob & { statuses: string[] } => {
   const statuses: string[] = [];
-  return { id, text: id, onStatus: (s) => statuses.push(s), statuses, ...extra };
+  return { id, text: id, language: 'ru', onStatus: (s) => statuses.push(s), statuses, ...extra };
 };
 
 describe('TtsQueue', () => {
@@ -151,5 +151,18 @@ describe('TtsQueue', () => {
     queue.enqueue(job('alert', { volume: 0.2 }));
     await flush();
     expect(speak.mock.calls[0][1].volume).toBe(0.2);
+  });
+
+  it("speaks each job with the voice chosen for its language", async () => {
+    const speak = vi.fn().mockResolvedValue(undefined);
+    const { queue } = makeQueue(speak);
+    queue.enqueue(job('privet'));
+    queue.enqueue(job('hello', { language: 'en' }));
+    await flush();
+    await flush();
+    expect(speak.mock.calls.map(([text, options]) => [text, options.language, options.voiceName])).toEqual([
+      ['privet', 'ru', 'Pavel'],
+      ['hello', 'en', 'Zira'],
+    ]);
   });
 });
