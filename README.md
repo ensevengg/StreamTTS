@@ -2,23 +2,26 @@
 
 **Desktop TTS for streamers.** Reads Twitch and YouTube chat messages aloud during live streams.
 
-[Download](https://github.com/MananJK/StreamTTS/releases) · [Report Bug](https://github.com/MananJK/StreamTTS/issues) · [Privacy](PRIVACY.md)
+[Download](https://github.com/ensevengg/StreamTTS/releases) · [Report Bug](https://github.com/ensevengg/StreamTTS/issues) · [Privacy](PRIVACY.md) · [OBS Setup](OBS_INTEGRATION_GUIDE.md)
 
 ## Features
 
-- **Twitch + YouTube** — OAuth-based chat integration; Twitch via IRC (tmi.js), YouTube via Data API v3 polling
+- **Twitch + YouTube** — Twitch chat over IRC (tmi.js), YouTube live chat via the Data API
+- **Read-only logins** — Twitch `chat:read` plus read-only sub/redemption scopes; YouTube `youtube.readonly` only
+- **Survives stream trouble** — chat reconnects on its own after network drops, Twitch maintenance and YouTube stream crashes
 - **Dual TTS Engine** — Browser Web Speech API (free, unlimited) or ElevenLabs (premium)
 - **`!г` Command Prefix** — read specific messages aloud; designed for Russian-language communities
-- **Alert Integration** — backend ingests Twitch EventSub subs/gifts/redemptions and YouTube PubSubHubbub events
-- **OBS Ready** — route audio through Browser Source
-- **Privacy-First** — tokens and settings stored locally; no telemetry, no analytics
+- **Viewer limits** — per-viewer cooldown, message length cap, links read as "link", Skip and Clear queue
+- **Alerts** — Twitch subs, gifted subs and channel points (EventSub WebSocket); YouTube Super Chats and memberships
+- **Privacy-First** — tokens and settings in the OS keychain; no telemetry, no analytics
 - **Cross-Platform** — Windows, macOS, Linux (Tauri v2)
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/MananJK/StreamTTS.git
+git clone https://github.com/ensevengg/StreamTTS.git
 cd StreamTTS
+cp .env.example .env   # then fill in your OAuth client IDs (see below)
 npm install
 npm run tauri:dev
 ```
@@ -27,37 +30,32 @@ npm run tauri:dev
 
 | Layer | |
 |-------|---|
-| Desktop | Tauri v2, Rust (Axum) |
+| Desktop | Tauri v2, Rust (Axum loopback server for the Google redirect) |
 | Frontend | React 18, TypeScript, Tailwind CSS, Vite |
 | UI | shadcn/ui, Radix primitives, Lucide icons |
-| State | Zustand (client) + TanStack React Query (server) |
-| Chat | tmi.js (Twitch IRC), YouTube Data API v3 |
+| State | Zustand |
+| Chat | tmi.js (Twitch IRC), Twitch EventSub WebSocket, YouTube Data API v3 |
 | TTS | Web Speech API, ElevenLabs REST API |
-| Tests | Vitest |
+| Tests | Vitest, `cargo test` |
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   StreamTTS                          │
-├─────────────────────────────────────────────────────┤
-│  Frontend (React + TypeScript + Tailwind)           │
-│    ├── Pages: Login, Index, NotFound                │
-│    ├── Components: Chat, Connections, Settings      │
-│    ├── Services: twitch, youtube, tts, alerts, queue│
-│    └── Stores: auth, chat, settings (Zustand)       │
-├─────────────────────────────────────────────────────┤
-│  Backend (Rust + Axum, localhost:3000)              │
-│    ├── OAuth callback server                        │
-│    ├── Google token exchange & refresh              │
-│    ├── Twitch EventSub webhook (HMAC verification)  │
-│    └── YouTube PubSubHubbub alerts                  │
-├─────────────────────────────────────────────────────┤
-│  External Services                                   │
-│    ├── Twitch IRC via tmi.js                        │
-│    ├── YouTube Data API v3 (polling)                │
-│    └── TTS: Web Speech API / ElevenLabs             │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  Frontend (React + TypeScript)                           │
+│    ├── Chat sessions (services/chatSessions.ts)          │
+│    │     Twitch IRC · Twitch EventSub · YouTube polling  │
+│    │     each reconnects with backoff on its own         │
+│    ├── Speech queue: filter → cooldown → queue → voice   │
+│    └── Stores: auth, chat, settings (Zustand)            │
+├──────────────────────────────────────────────────────────┤
+│  Backend (Rust)                                          │
+│    ├── Twitch login: Device Code Flow (no client secret) │
+│    ├── YouTube login: auth code + PKCE, loopback redirect│
+│    │     on localhost:3000 (falls back to a free port)   │
+│    ├── Token refresh commands (IPC, never over HTTP)     │
+│    └── OS keychain access (allowlisted keys)             │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ## Project Structure
@@ -66,48 +64,67 @@ npm run tauri:dev
 src/                          # React frontend
 ├── pages/                    # Index, Login, NotFound
 ├── components/               # UI components + shadcn/ui primitives
-├── services/                 # twitch, youtube, tts, ttsQueue, alerts
+├── services/                 # chat sessions, auth, tokens, TTS queue, alerts
 ├── stores/                   # Zustand: auth, chat, settings
-├── hooks/                    # React hooks (connections, queries, TTS queue, OAuth, updates)
-├── config/                   # Client IDs, security utilities
-├── types/                    # TypeScript definitions
-├── lib/                      # Utilities
-└── tests/                    # Vitest tests for stores, services, security
+├── hooks/                    # auth callbacks, app updates, toasts
+├── config/                   # constants
+├── lib/                      # Tauri bridge, keychain storage, HTTP, backoff
+├── test/                     # Vitest setup and desktop mocks
+└── types/                    # TypeScript definitions
 
 src-tauri/                    # Rust backend
 ├── src/
-│   ├── main.rs               # Entry point
-│   ├── lib.rs                # App init, Tauri plugin setup, event forwarding
-│   ├── oauth.rs              # Axum server: OAuth callbacks, token exchange, webhooks
-│   └── alerts.rs             # Alert payload processing
-├── tauri.conf.json
-└── Cargo.toml
+│   ├── lib.rs                # App init, plugins, commands
+│   ├── oauth.rs              # YouTube login, loopback callback, token refresh
+│   ├── twitch_auth.rs        # Twitch Device Code Flow
+│   ├── config.rs             # OAuth client configuration
+│   └── secrets.rs            # OS keychain commands
+├── build.rs                  # Embeds OAuth client config at compile time
+├── oauth_callback.html       # Page the browser lands on after Google login
+└── tauri.conf.json
 ```
 
-## OAuth Setup (Development)
+## OAuth Setup
 
-Set these in a `.env` at the project root (see `.env.example`):
+Copy `.env.example` to `.env` at the project root. `src-tauri/build.rs`
+compiles the values into the binary, so installed copies need no `.env`.
 
-Twitch and YouTube Client IDs are configured in `src/config/security.ts`.
+**Twitch:** [Developer Console](https://dev.twitch.tv/console) → register an
+application with **Client Type: Public**, then set `TWITCH_CLIENT_ID`. Login
+uses Twitch's Device Code Flow, so there is no client secret and no redirect URL
+to configure.
 
-**Twitch:** [Developer Console](https://dev.twitch.tv/console) → OAuth Redirect URL: `http://localhost:3000/callback`
+**YouTube:** [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+→ enable **YouTube Data API v3** → create an OAuth client of type **Desktop
+app** → set `YOUTUBE_CLIENT_ID` and `YOUTUBE_CLIENT_SECRET`. On the consent
+screen, add only the `.../auth/youtube.readonly` scope. Google treats a desktop
+client's secret as non-confidential.
 
-**YouTube:** [Google Cloud Console](https://console.cloud.google.com) → OAuth 2.0 Client ID → redirect URI `http://localhost:3000/callback` + scopes `youtube.readonly`, `youtube`, `youtube.force-ssl`
-
-The backend `.env` (`src-tauri/.env.example`) requires `YOUTUBE_CLIENT_SECRET` and `TWITCH_EVENTSUB_SECRET` for token exchange and webhook verification.
+**YouTube API quota:** each chat poll costs 5 units and the default project
+quota is 10,000 units/day, shared by everyone using your client ID. StreamTTS
+polls at most every 5 seconds; request a quota increase from Google before
+distributing builds widely.
 
 ## Scripts
 
 | Command | |
 |---------|-|
-| `npm run dev` | Vite dev server |
+| `npm run dev` | Vite dev server (localhost only) |
 | `npm run tauri:dev` | Full desktop app in dev mode |
 | `npm run tauri:build` | Production build |
-| `npm run test` | Run Vitest |
+| `npm run test` | Frontend tests (Vitest) |
+| `cd src-tauri && cargo test` | Backend tests |
 | `npm run lint` | ESLint |
 | `npm run clean` | Remove `dist/` |
 
 Platform-specific builds: `tauri:build:win`, `tauri:build:mac`, `tauri:build:linux`.
+
+## Releases and updates
+
+The updater reads `latest.json` from the latest GitHub release of
+`ensevengg/StreamTTS` and only installs updates signed with the key whose public
+half is in `tauri.conf.json`. Publish `latest.json` with each release (the
+Tauri GitHub Action generates it) and keep the private signing key secret.
 
 ## Requirements
 
