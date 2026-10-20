@@ -33,3 +33,12 @@ sha2 = "0.10"
 hex = "0.4"
 rand = "0.8"
 keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
+# gRPC client for YouTube's streaming live chat (liveChatMessages.streamList).
+# "transport" also provides the server half, used by the stream tests.
+tonic = { version = "0.12", default-features = false, features = ["transport", "tls-native-roots", "prost"] }
+prost = "0.13"
+
+[dev-dependencies]
+tokio-stream = { version = "0.1", features = ["net"] }
+tower-service = "0.3"
+http-body = "1"

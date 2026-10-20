@@ -2,12 +2,20 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   BROADCAST_CHECK_MS,
   MIN_POLL_MS,
+  STREAM_RETRY_MS,
   YouTubeChatSession,
   chatItemToAlert,
   classifyYouTubeError,
   type YouTubeChatDeps,
 } from './youtubeChat';
-import { YouTubeApiError, type LiveBroadcast, type LiveChatItem, type LiveChatPage } from './youtubeService';
+import {
+  StreamTransportError,
+  StreamUnavailableError,
+  YouTubeApiError,
+  type LiveBroadcast,
+  type LiveChatItem,
+  type LiveChatPage,
+} from './youtubeService';
 import type { AlertData } from './alertsService';
 
 const NOW = Date.parse('2026-10-20T12:00:00Z');
@@ -42,7 +50,15 @@ const advance = async (ms: number) => {
 
 type PageStep = LiveChatPage | Error;
 
-function setup({ broadcasts, pages }: { broadcasts: LiveBroadcast[][]; pages: PageStep[] }) {
+interface SetupOptions {
+  broadcasts: LiveBroadcast[][];
+  pages: PageStep[];
+  /** Defaults to "streaming unavailable", which exercises the polling fallback. */
+  openStream?: YouTubeChatDeps['openStream'];
+  now?: () => number;
+}
+
+function setup({ broadcasts, pages, openStream, now }: SetupOptions) {
   const messages: string[] = [];
   const alerts: AlertData[] = [];
   const statuses: string[] = [];
@@ -59,7 +75,10 @@ function setup({ broadcasts, pages }: { broadcasts: LiveBroadcast[][]; pages: Pa
       if (step instanceof Error) throw step;
       return step;
     }),
-    now: () => NOW,
+    openStream: openStream ?? vi.fn(async () => {
+      throw new StreamUnavailableError('no desktop backend in tests');
+    }),
+    now: now ?? (() => NOW),
   };
 
   const session = new YouTubeChatSession(
@@ -275,5 +294,203 @@ describe('chatItemToAlert', () => {
 
   it('ignores plain chat', () => {
     expect(chatItemToAlert(text('1', 'hi'))).toBeNull();
+  });
+});
+
+/**
+ * A stand-in for streamLiveChat: each open() call becomes a stream the test
+ * feeds pages into and then closes or fails.
+ */
+function fakeStreams() {
+  const opened: {
+    pageToken: string | null;
+    push: (page: LiveChatPage) => void;
+    close: () => void;
+    fail: (error: Error) => void;
+    aborted: () => boolean;
+  }[] = [];
+  const openStream: YouTubeChatDeps['openStream'] = vi.fn((_token, _chatId, pageToken, onPage, signal) =>
+    new Promise<void>((resolve, reject) => {
+      signal.addEventListener('abort', () => resolve(), { once: true });
+      opened.push({ pageToken, push: onPage, close: resolve, fail: reject, aborted: () => signal.aborted });
+    }),
+  );
+  return { opened, openStream };
+}
+
+describe('YouTubeChatSession streaming', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('reads chat from one open stream without polling', async () => {
+    const streams = fakeStreams();
+    const { session, messages, statuses, pageRequests } = setup({
+      broadcasts: [[broadcast('chat1')]],
+      pages: [],
+      openStream: streams.openStream,
+    });
+    session.start();
+    await settle();
+    expect(streams.opened).toHaveLength(1);
+
+    streams.opened[0].push({ items: [text('old', '!г backlog', 2)], nextPageToken: 'p1' });
+    streams.opened[0].push({ items: [text('n1', '!г one')], nextPageToken: 'p2' });
+    streams.opened[0].push({ items: [text('n2', '!г two'), text('n1', '!г one')], nextPageToken: 'p3' });
+    await advance(10 * 60_000);
+
+    expect(messages).toEqual(['!г one', '!г two']);
+    expect(statuses[statuses.length - 1]).toBe('connected');
+    expect(pageRequests).toHaveLength(0);
+    expect(streams.opened).toHaveLength(1); // still the same connection
+    session.stop();
+  });
+
+  it('reopens a stream YouTube closed, from the last page, no sooner than a poll would run', async () => {
+    const streams = fakeStreams();
+    const { session } = setup({
+      broadcasts: [[broadcast('chat1')]],
+      pages: [],
+      openStream: streams.openStream,
+      now: () => Date.now(),
+    });
+    session.start();
+    await settle();
+    streams.opened[0].push({ items: [], nextPageToken: 'p1' });
+    streams.opened[0].close();
+    await settle();
+    // Closed almost immediately: the next stream waits out the quota floor.
+    expect(streams.opened).toHaveLength(1);
+
+    await advance(MIN_POLL_MS);
+    expect(streams.opened).toHaveLength(2);
+    expect(streams.opened[1].pageToken).toBe('p1');
+
+    // A stream that stayed open longer than the floor reopens right away.
+    await advance(60_000);
+    streams.opened[1].close();
+    await settle();
+    expect(streams.opened).toHaveLength(3);
+    session.stop();
+  });
+
+  it('falls back to polling when gRPC keeps failing to connect', async () => {
+    const streams = fakeStreams();
+    const { session, statuses, pageRequests } = setup({
+      broadcasts: [[broadcast('chat1')]],
+      pages: [{ items: [], nextPageToken: 'p1' }],
+      openStream: streams.openStream,
+    });
+    session.start();
+    await settle();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      streams.opened[attempt].fail(new StreamTransportError('connect error'));
+      await advance(61_000);
+    }
+
+    expect(streams.opened).toHaveLength(3);
+    expect(pageRequests.length).toBeGreaterThan(0);
+    expect(statuses[statuses.length - 1]).toBe('connected');
+    session.stop();
+  });
+
+  it('goes back to streaming after a fallback, in case it was only an outage', async () => {
+    const streams = fakeStreams();
+    const { session, pageRequests } = setup({
+      broadcasts: [[broadcast('chat1')]],
+      pages: [],
+      openStream: streams.openStream,
+      now: () => Date.now(),
+    });
+    session.start();
+    await settle();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      streams.opened[attempt].fail(new StreamTransportError('offline'));
+      await advance(61_000);
+    }
+    const pollsWhileFallenBack = pageRequests.length;
+    expect(pollsWhileFallenBack).toBeGreaterThan(0);
+
+    await advance(STREAM_RETRY_MS);
+    expect(streams.opened).toHaveLength(4);
+    // Back on the stream: polling has stopped.
+    const pollsAtSwitch = pageRequests.length;
+    await advance(60_000);
+    expect(pageRequests.length).toBe(pollsAtSwitch);
+    session.stop();
+  });
+
+  it('a failed retry goes straight back to polling and waits twice as long next time', async () => {
+    const streams = fakeStreams();
+    const { session, statuses } = setup({
+      broadcasts: [[broadcast('chat1')]],
+      pages: [],
+      openStream: streams.openStream,
+      now: () => Date.now(),
+    });
+    session.start();
+    await settle();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      streams.opened[attempt].fail(new StreamTransportError('blocked'));
+      await advance(61_000);
+    }
+    await advance(STREAM_RETRY_MS);
+    expect(streams.opened).toHaveLength(4);
+
+    const before = statuses.length;
+    streams.opened[3].fail(new StreamTransportError('still blocked'));
+    await settle();
+    // No backoff wait: chat keeps being polled.
+    expect(statuses.slice(before)).not.toContain('reconnecting');
+
+    await advance(STREAM_RETRY_MS);
+    expect(streams.opened).toHaveLength(4);
+    await advance(STREAM_RETRY_MS + MIN_POLL_MS);
+    expect(streams.opened).toHaveLength(5);
+    session.stop();
+  });
+
+  it('ignores a late error from a stream whose chat already ended', async () => {
+    const streams = fakeStreams();
+    const { session, statuses } = setup({
+      broadcasts: [[broadcast('chat1')], []],
+      pages: [],
+      openStream: streams.openStream,
+    });
+    session.start();
+    await settle();
+    streams.opened[0].push({ items: [{ id: 'end', snippet: { type: 'chatEndedEvent' } }], nextPageToken: 'p1' });
+    streams.opened[0].fail(new StreamTransportError('connection reset'));
+    await settle();
+    expect(statuses[statuses.length - 1]).toBe('waiting');
+    expect(statuses).not.toContain('reconnecting');
+    session.stop();
+  });
+
+  it('handles stream errors like poll errors', async () => {
+    const streams = fakeStreams();
+    const { session, statuses } = setup({
+      broadcasts: [[broadcast('chat1')], []],
+      pages: [],
+      openStream: streams.openStream,
+    });
+    session.start();
+    await settle();
+    streams.opened[0].push({ items: [], nextPageToken: 'p1' });
+    streams.opened[0].fail(new YouTubeApiError(403, 'liveChatEnded', 'LIVE_CHAT_ENDED'));
+    await settle();
+    expect(statuses[statuses.length - 1]).toBe('waiting');
+    session.stop();
+  });
+
+  it('stop() closes the open stream', async () => {
+    const streams = fakeStreams();
+    const { session } = setup({ broadcasts: [[broadcast('chat1')]], pages: [], openStream: streams.openStream });
+    session.start();
+    await settle();
+    session.stop();
+    expect(streams.opened[0].aborted()).toBe(true);
   });
 });

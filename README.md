@@ -6,7 +6,7 @@
 
 ## Features
 
-- **Twitch + YouTube** — Twitch chat over IRC (tmi.js), YouTube live chat via the Data API
+- **Twitch + YouTube** — Twitch chat over IRC (tmi.js), YouTube live chat streamed from the Data API
 - **Read-only logins** — Twitch `chat:read` plus read-only sub/redemption scopes; YouTube `youtube.readonly` only
 - **Survives stream trouble** — chat reconnects on its own after network drops, Twitch maintenance and YouTube stream crashes
 - **Dual TTS Engine** — Browser Web Speech API (free, unlimited) or ElevenLabs (premium)
@@ -30,11 +30,11 @@ npm run tauri:dev
 
 | Layer | |
 |-------|---|
-| Desktop | Tauri v2, Rust (Axum loopback server for the Google redirect) |
+| Desktop | Tauri v2, Rust (Axum loopback server for the Google redirect, tonic gRPC client for YouTube chat) |
 | Frontend | React 18, TypeScript, Tailwind CSS, Vite |
 | UI | shadcn/ui, Radix primitives, Lucide icons |
 | State | Zustand |
-| Chat | tmi.js (Twitch IRC), Twitch EventSub WebSocket, YouTube Data API v3 |
+| Chat | tmi.js (Twitch IRC), Twitch EventSub WebSocket, YouTube Data API v3 (`streamList` over gRPC) |
 | TTS | Web Speech API, ElevenLabs REST API |
 | Tests | Vitest, `cargo test` |
 
@@ -44,7 +44,7 @@ npm run tauri:dev
 ┌──────────────────────────────────────────────────────────┐
 │  Frontend (React + TypeScript)                           │
 │    ├── Chat sessions (services/chatSessions.ts)          │
-│    │     Twitch IRC · Twitch EventSub · YouTube polling  │
+│    │     Twitch IRC · Twitch EventSub · YouTube chat     │
 │    │     each reconnects with backoff on its own         │
 │    ├── Speech queue: filter → cooldown → queue → voice   │
 │    └── Stores: auth, chat, settings (Zustand)            │
@@ -54,6 +54,7 @@ npm run tauri:dev
 │    ├── YouTube login: auth code + PKCE, loopback redirect│
 │    │     on localhost:3000 (falls back to a free port)   │
 │    ├── Token refresh commands (IPC, never over HTTP)     │
+│    ├── YouTube chat stream (gRPC streamList)             │
 │    └── OS keychain access (allowlisted keys)             │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -77,6 +78,7 @@ src-tauri/                    # Rust backend
 │   ├── lib.rs                # App init, plugins, commands
 │   ├── oauth.rs              # YouTube login, loopback callback, token refresh
 │   ├── twitch_auth.rs        # Twitch Device Code Flow
+│   ├── youtube_stream.rs     # YouTube live chat over gRPC (streamList)
 │   ├── config.rs             # OAuth client configuration
 │   └── secrets.rs            # OS keychain commands
 ├── build.rs                  # Embeds OAuth client config at compile time
@@ -100,10 +102,13 @@ app** → set `YOUTUBE_CLIENT_ID` and `YOUTUBE_CLIENT_SECRET`. On the consent
 screen, add only the `.../auth/youtube.readonly` scope. Google treats a desktop
 client's secret as non-confidential.
 
-**YouTube API quota:** each chat poll costs 5 units and the default project
-quota is 10,000 units/day, shared by everyone using your client ID. StreamTTS
-polls at most every 5 seconds; request a quota increase from Google before
-distributing builds widely.
+**YouTube API quota:** the YouTube Data API is free, but each Google project
+gets 10,000 units/day, shared by everyone using your client ID. StreamTTS reads
+chat with `liveChatMessages.streamList`: one long-lived connection that costs 5
+units each time it opens, rather than a 5-unit poll every few seconds. If
+streaming can't connect (for example on a network that blocks gRPC), it falls
+back to polling at most every 5 seconds, which uses far more quota. If usage
+grows, Google's free *Audit and Quota Extension* form raises the limit.
 
 ## Scripts
 

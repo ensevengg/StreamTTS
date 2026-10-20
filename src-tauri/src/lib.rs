@@ -4,6 +4,7 @@ mod config;
 mod oauth;
 mod secrets;
 mod twitch_auth;
+mod youtube_stream;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -19,6 +20,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(oauth::OAuthStates::default())
         .manage(twitch_auth::TwitchDeviceFlow::default())
+        .manage(youtube_stream::ChatStreams::default())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -45,6 +47,8 @@ pub fn run() {
             twitch_auth::twitch_device_start,
             twitch_auth::twitch_device_cancel,
             twitch_auth::twitch_refresh_token,
+            youtube_stream::youtube_chat_stream,
+            youtube_stream::youtube_chat_stream_stop,
             secrets::secret_get,
             secrets::secret_set,
             secrets::secret_delete

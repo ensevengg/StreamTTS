@@ -1,4 +1,4 @@
-import { invoke, isSignedOutError, isTauriAvailable, type RefreshedTokens } from '@/lib/tauri-api';
+import { Channel, invoke, isSignedOutError, isTauriAvailable, type RefreshedTokens } from '@/lib/tauri-api';
 import { secureGet, secureSet, secureDelete } from '@/lib/secureStorage';
 import { errorMessage, fetchJson } from '@/lib/http';
 
@@ -194,4 +194,86 @@ export const fetchOwnChannelTitle = async (token: string): Promise<string | null
     items?: { snippet?: { title?: string } }[];
   };
   return body?.items?.[0]?.snippet?.title ?? null;
+};
+
+/** Streaming isn't possible here (no desktop backend, or YouTube refused the method). */
+export class StreamUnavailableError extends Error {
+  name = 'StreamUnavailableError';
+}
+
+/** The gRPC connection to YouTube couldn't be made at all. */
+export class StreamTransportError extends Error {
+  name = 'StreamTransportError';
+}
+
+interface StreamFailure {
+  status: number;
+  reason: string;
+  message: string;
+}
+
+type StreamEvent =
+  | { event: 'page'; page: LiveChatPage }
+  | { event: 'end'; error: StreamFailure | null };
+
+const streamFailureToError = (failure: StreamFailure): Error => {
+  if (failure.reason === 'streamUnsupported') return new StreamUnavailableError(failure.message);
+  if (failure.status === 0) return new StreamTransportError(failure.message);
+  return new YouTubeApiError(failure.status, failure.reason, failure.message);
+};
+
+let nextStreamId = 1;
+
+/**
+ * Receives live chat over liveChatMessages.streamList (see
+ * youtube_stream.rs): YouTube pushes pages down one long-lived call instead
+ * of being polled, which costs a fraction of the daily quota. Resolves when
+ * YouTube closes the stream or `signal` aborts; rejects with the same
+ * YouTubeApiError a poll would, or with StreamUnavailableError /
+ * StreamTransportError when streaming itself doesn't work.
+ */
+export const streamLiveChat = (
+  token: string,
+  liveChatId: string,
+  pageToken: string | null,
+  onPage: (page: LiveChatPage) => void,
+  signal: AbortSignal,
+): Promise<void> => {
+  if (!isTauriAvailable()) {
+    return Promise.reject(new StreamUnavailableError('Streaming chat needs the StreamTTS desktop app'));
+  }
+  const streamId = nextStreamId++;
+
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onAbort = () => {
+      invoke('youtube_chat_stream_stop', { streamId }).catch(() => {});
+      finish();
+    };
+    if (signal.aborted) {
+      finish();
+      return;
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+
+    // Pages and the final event share one channel, so they arrive in order.
+    const channel = new Channel<StreamEvent>();
+    channel.onmessage = (event) => {
+      if (settled) return;
+      if (event.event === 'page') {
+        onPage(event.page);
+      } else {
+        finish(event.error ? streamFailureToError(event.error) : undefined);
+      }
+    };
+    invoke('youtube_chat_stream', { streamId, accessToken: token, liveChatId, pageToken, onEvent: channel })
+      .catch((error) => finish(new StreamUnavailableError(errorMessage(error))));
+  });
 };

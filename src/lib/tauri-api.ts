@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-shell';
 
@@ -51,7 +51,7 @@ export const openExternal = async (url: string): Promise<void> => {
   await open(url);
 };
 
-export { invoke };
+export { Channel, invoke };
 
 const subscribe = <T>(event: string, callback: (payload: T) => void): (() => void) => {
   if (!isTauriAvailable()) return () => {};

@@ -5,6 +5,9 @@ import {
   fetchLiveChatPage,
   getValidYoutubeToken,
   invalidateYoutubeAccessToken,
+  streamLiveChat,
+  StreamTransportError,
+  StreamUnavailableError,
   YouTubeApiError,
   type LiveBroadcast,
   type LiveChatItem,
@@ -32,6 +35,13 @@ export interface YouTubeChatDeps {
   invalidateToken: () => Promise<void>;
   fetchBroadcasts: (token: string, signal: AbortSignal) => Promise<LiveBroadcast[]>;
   fetchPage: (token: string, liveChatId: string, pageToken: string | null, signal: AbortSignal) => Promise<LiveChatPage>;
+  openStream: (
+    token: string,
+    liveChatId: string,
+    pageToken: string | null,
+    onPage: (page: LiveChatPage) => void,
+    signal: AbortSignal,
+  ) => Promise<void>;
   now: () => number;
 }
 
@@ -40,15 +50,26 @@ const defaultDeps: YouTubeChatDeps = {
   invalidateToken: invalidateYoutubeAccessToken,
   fetchBroadcasts: fetchActiveBroadcasts,
   fetchPage: fetchLiveChatPage,
+  openStream: streamLiveChat,
   now: Date.now,
 };
 
 /**
- * Polling floor. Every poll costs 5 units of the Google project's daily quota
- * (10,000 by default, shared by everyone using this client ID), so we never
- * poll faster than this even when YouTube suggests a shorter interval.
+ * Polling floor, and the shortest gap between opening chat streams. Every
+ * poll, and every new stream, costs 5 units of the Google project's daily
+ * quota (10,000 by default, shared by everyone using this client ID).
+ * Streaming is the normal path; polling is the fallback when it can't work.
  */
 export const MIN_POLL_MS = 5000;
+/** Consecutive failures to reach the gRPC endpoint before falling back to polling. */
+const MAX_STREAM_TRANSPORT_FAILURES = 3;
+/**
+ * After falling back to polling, try streaming again after this long (the
+ * failures may just have been an outage, and polling costs far more quota),
+ * doubling after each failed retry up to STREAM_RETRY_MAX_MS.
+ */
+export const STREAM_RETRY_MS = 10 * 60_000;
+const STREAM_RETRY_MAX_MS = 2 * 60 * 60_000;
 /** How often to look for a broadcast while waiting (1 quota unit per check). */
 export const BROADCAST_CHECK_MS = 30_000;
 /** Messages this much older than the moment a chat ended still get read. */
@@ -59,7 +80,8 @@ class SignedOutError extends Error {}
 class TokenUnavailableError extends Error {}
 
 type ErrorKind =
-  | { kind: 'transient'; detail: string }
+  | { kind: 'transient'; detail: string; transport?: boolean }
+  | { kind: 'stream_unavailable' }
   | { kind: 'auth' }
   | { kind: 'chat_ended'; detail: string }
   | { kind: 'reset_page' }
@@ -71,6 +93,10 @@ export function classifyYouTubeError(error: unknown): ErrorKind {
   }
   if (error instanceof TokenUnavailableError) {
     return { kind: 'transient', detail: 'Could not refresh the YouTube login' };
+  }
+  if (error instanceof StreamUnavailableError) return { kind: 'stream_unavailable' };
+  if (error instanceof StreamTransportError) {
+    return { kind: 'transient', detail: 'Connection to YouTube lost', transport: true };
   }
   if (!(error instanceof YouTubeApiError)) {
     // fetch rejects on network failures and timeouts.
@@ -159,20 +185,22 @@ export function chatItemToAlert(item: LiveChatItem): AlertData | null {
   }
 }
 
-type Task = 'discover' | 'poll';
+type Task = 'discover' | 'listen' | 'poll';
 
 interface AttachedChat {
   liveChatId: string;
   pageToken: string | null;
+  /** Set once the first page (with its backlog) has been handled. */
+  primed: boolean;
   /** Read first-page messages published after this; null skips the backlog. */
   since: number | null;
 }
 
 /**
  * The signed-in channel's live chat. It finds the active broadcast (or waits
- * for one), polls its chat, rides out network trouble with backoff, and when
- * a stream crashes and its chat ends it attaches to the next broadcast on its
- * own.
+ * for one), streams its chat (polling if streaming can't work), rides out
+ * network trouble with backoff, and when a stream crashes and its chat ends
+ * it attaches to the next broadcast on its own.
  */
 export class YouTubeChatSession {
   private stopped = false;
@@ -186,6 +214,13 @@ export class YouTubeChatSession {
   private authFailures = 0;
   private lastStatus: string | null = null;
   private readonly seen = new BoundedSet<string>(5000);
+  private streaming = true;
+  private streamTransportFailures = 0;
+  /** When polling, the time to try streaming again (Infinity: never). */
+  private streamRetryAt = 0;
+  private streamRetryDelay = STREAM_RETRY_MS;
+  /** Retrying streaming after a fallback: one failure goes straight back. */
+  private streamProbation = false;
 
   constructor(
     private readonly handlers: YouTubeChatHandlers,
@@ -237,11 +272,16 @@ export class YouTubeChatSession {
     if (this.stopped) return;
     const controller = new AbortController();
     this.controller = controller;
+    const chat = this.chat;
     try {
       if (task === 'discover') await this.discover(controller.signal);
+      else if (task === 'listen') await this.listen(controller.signal);
       else await this.poll(controller.signal);
     } catch (error) {
-      if (!this.stopped) await this.handleError(task, error);
+      // A stream can fail after its chat has already ended and the session
+      // moved on; that error belongs to a chat we no longer read.
+      const stale = task !== 'discover' && chat !== this.chat;
+      if (!this.stopped && !stale) await this.handleError(task, error);
     }
   }
 
@@ -272,11 +312,40 @@ export class YouTubeChatSession {
     this.chat = {
       liveChatId: live.snippet.liveChatId,
       pageToken: null,
+      primed: false,
       // After a crash, read what viewers sent while we were away.
       since: this.endedAt === null ? null : this.endedAt - RESUME_SLACK_MS,
     };
     this.handlers.onBroadcast(live.snippet.title || 'YouTube live stream');
-    this.schedule('poll', 0);
+    this.schedule(this.readTask(), 0);
+  }
+
+  private readTask(): Task {
+    return this.streaming ? 'listen' : 'poll';
+  }
+
+  private async listen(signal: AbortSignal): Promise<void> {
+    const chat = this.chat;
+    if (!chat) {
+      this.schedule('discover', 0);
+      return;
+    }
+    const token = await this.token();
+    const openedAt = this.deps.now();
+    let ended = false;
+    await this.deps.openStream(token, chat.liveChatId, chat.pageToken, (page) => {
+      if (this.stopped || chat !== this.chat || ended) return;
+      this.streamTransportFailures = 0;
+      this.streamProbation = false;
+      this.streamRetryDelay = STREAM_RETRY_MS;
+      ended = this.handlePage(chat, page);
+    }, signal);
+    if (this.stopped || chat !== this.chat || ended) return;
+
+    // YouTube closed the stream; reopen from the last page token. A new
+    // stream costs as much quota as a poll, so never reopen faster than
+    // polling would run.
+    this.schedule('listen', Math.max(0, MIN_POLL_MS - (this.deps.now() - openedAt)));
   }
 
   private async poll(signal: AbortSignal): Promise<void> {
@@ -287,12 +356,25 @@ export class YouTubeChatSession {
     }
     const page = await this.deps.fetchPage(await this.token(), chat.liveChatId, chat.pageToken, signal);
     if (this.stopped || chat !== this.chat) return;
+    if (this.handlePage(chat, page)) return;
+    if (this.deps.now() >= this.streamRetryAt) {
+      this.streaming = true;
+      this.streamProbation = true;
+      this.streamTransportFailures = 0;
+      this.schedule('listen', 0);
+      return;
+    }
+    this.schedule('poll', Math.max(page.pollingIntervalMillis ?? MIN_POLL_MS, MIN_POLL_MS));
+  }
 
+  /** Handles one page, polled or streamed. Returns true if the chat ended. */
+  private handlePage(chat: AttachedChat, page: LiveChatPage): boolean {
     this.failures = 0;
     this.authFailures = 0;
     this.setStatus('connected');
 
-    const firstPage = chat.pageToken === null;
+    const firstPage = !chat.primed;
+    chat.primed = true;
     chat.pageToken = page.nextPageToken ?? chat.pageToken;
     let ended = false;
     for (const item of page.items ?? []) {
@@ -305,11 +387,8 @@ export class YouTubeChatSession {
       this.dispatch(item);
     }
 
-    if (ended) {
-      this.chatEnded(chat, 'The stream ended. Waiting for it to go live again.');
-      return;
-    }
-    this.schedule('poll', Math.max(page.pollingIntervalMillis ?? MIN_POLL_MS, MIN_POLL_MS));
+    if (ended) this.chatEnded(chat, 'The stream ended. Waiting for it to go live again.');
+    return ended;
   }
 
   private isAfter(item: LiveChatItem, since: number | null): boolean {
@@ -352,8 +431,11 @@ export class YouTubeChatSession {
         await this.deps.invalidateToken();
         this.schedule(task, 1000);
         return;
+      case 'stream_unavailable':
+        this.fallBackToPolling('YouTube streaming is unavailable', Infinity);
+        return;
       case 'chat_ended':
-        if (task === 'poll' && this.chat) {
+        if (task !== 'discover' && this.chat) {
           this.chatEnded(this.chat, classified.detail);
         } else {
           this.setStatus('waiting', classified.detail);
@@ -363,6 +445,7 @@ export class YouTubeChatSession {
       case 'reset_page':
         if (this.chat) {
           this.chat.pageToken = null;
+          this.chat.primed = false;
           this.chat.since = this.deps.now() - RESUME_SLACK_MS;
         }
         this.schedule(task, 0);
@@ -371,12 +454,35 @@ export class YouTubeChatSession {
         this.fail(classified.message);
         return;
       case 'transient': {
+        if (task === 'listen' && classified.transport) {
+          this.streamTransportFailures += 1;
+          // gRPC may be blocked (proxy, firewall) where plain HTTPS works.
+          // A retry after a fallback gets one chance, so a blocked network
+          // doesn't lose chat while it backs off.
+          const limit = this.streamProbation ? 1 : MAX_STREAM_TRANSPORT_FAILURES;
+          if (this.streamTransportFailures >= limit) {
+            if (this.streamProbation) {
+              this.streamRetryDelay = Math.min(this.streamRetryDelay * 2, STREAM_RETRY_MAX_MS);
+            }
+            this.fallBackToPolling('YouTube streaming is unreachable', this.streamRetryDelay);
+            return;
+          }
+        }
         this.failures += 1;
         const delay = backoffDelay(this.failures, { baseMs: 5000, maxMs: 60_000 });
         this.setStatus('reconnecting', `${classified.detail}. Retrying in ${Math.ceil(delay / 1000)}s.`);
         this.schedule(task, delay);
       }
     }
+  }
+
+  /** Polling uses more quota but works over plain HTTPS. */
+  private fallBackToPolling(reason: string, retryStreamingAfterMs: number): void {
+    console.warn(`${reason}; polling YouTube chat instead.`);
+    this.streaming = false;
+    this.streamProbation = false;
+    this.streamRetryAt = this.deps.now() + retryStreamingAfterMs;
+    this.schedule(this.chat ? 'poll' : 'discover', 0);
   }
 
   private fail(message: string): void {
