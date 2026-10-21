@@ -115,6 +115,11 @@ const Index = () => {
     });
   }, [setApiKey, toast]);
 
+  const handleApiKeyRemove = useCallback(() => {
+    setApiKey('');
+    toast({ title: "API Key Removed", description: "Your ElevenLabs API key was deleted" });
+  }, [setApiKey, toast]);
+
   const handleVolumeChange = useCallback((value: number) => {
     setVolume(value);
   }, [setVolume]);
@@ -306,9 +311,10 @@ const Index = () => {
 
                     {ttsProvider === 'elevenlabs' && (
                       <div className="grid place-items-center">
-                        <ApiKeyInput 
-                          onApiKeySubmit={handleApiKeySubmit} 
-                          apiKeySet={!!apiKey} 
+                        <ApiKeyInput
+                          onApiKeySubmit={handleApiKeySubmit}
+                          onApiKeyRemove={handleApiKeyRemove}
+                          apiKeySet={!!apiKey}
                         />
                       </div>
                     )}
