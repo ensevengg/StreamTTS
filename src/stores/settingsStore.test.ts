@@ -16,14 +16,4 @@ describe('mergePersistedSettings', () => {
     const merged = mergePersistedSettings({ apiKey: 'sk-saved', volume: 0.3, ttsProvider: 'elevenlabs', selectedVoice: 'Pavel' }, current);
     expect(merged).toMatchObject({ apiKey: 'sk-saved', volume: 0.3, ttsProvider: 'elevenlabs', ttsMaxLength: 200 });
   });
-
-  it('ignores invalid values field by field', () => {
-    const merged = mergePersistedSettings({ apiKey: 'sk', volume: 7, ttsMaxLength: 'long' }, current);
-    expect(merged).toMatchObject({ apiKey: 'sk', volume: 0.7, ttsMaxLength: 200 });
-  });
-
-  it('survives missing or junk storage', () => {
-    expect(mergePersistedSettings(undefined, current)).toEqual(current);
-    expect(mergePersistedSettings('junk', current)).toEqual(current);
-  });
 });

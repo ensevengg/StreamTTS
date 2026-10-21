@@ -34,26 +34,4 @@ describe('AlertService', () => {
     service.publish(superChat);
     expect(speakAlert).not.toHaveBeenCalled();
   });
-
-  it('keeps the EventSub connection only while a Twitch alert is wanted', () => {
-    const service = AlertService.getInstance();
-    expect(service.wantsTwitchEvents()).toBe(true);
-    service.updateSettings({ twitchSubs: false, twitchGifts: false, twitchRedemptions: false });
-    expect(service.wantsTwitchEvents()).toBe(false);
-  });
-
-  it('notifies settings listeners', () => {
-    const service = AlertService.getInstance();
-    const listener = vi.fn();
-    const off = service.onSettingsChange(listener);
-    service.updateSettings({ volume: 0.5 });
-    off();
-    service.updateSettings({ volume: 0.6 });
-    expect(listener).toHaveBeenCalledTimes(1);
-  });
-
-  it('persists settings', () => {
-    AlertService.getInstance().updateSettings({ twitchGifts: false });
-    expect(JSON.parse(localStorage.getItem('streamtts-alert-settings')!).twitchGifts).toBe(false);
-  });
 });

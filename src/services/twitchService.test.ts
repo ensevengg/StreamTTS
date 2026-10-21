@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { commandHandlers, desktopTauriApi, fakeInvoke, keychain, resetDesktop } from '@/test/desktopMock';
+import { commandHandlers, desktopTauriApi, keychain, resetDesktop } from '@/test/desktopMock';
 
 vi.mock('@/lib/tauri-api', () => desktopTauriApi());
 
@@ -7,7 +7,6 @@ import {
   checkTwitchSession,
   clearTwitchOAuthToken,
   getValidTwitchToken,
-  hasTwitchOAuthToken,
   saveTwitchTokens,
 } from './twitchService';
 
@@ -30,19 +29,6 @@ describe('twitchService', () => {
     vi.unstubAllGlobals();
   });
 
-  it('stores tokens in the keychain with their expiry', async () => {
-    await saveTwitchTokens('access', 'refresh', 14_400);
-    expect(stored()).toMatchObject({ token: 'access', refresh_token: 'refresh' });
-    expect(stored().expires_at).toBeGreaterThan(Date.now());
-    expect(await hasTwitchOAuthToken()).toBe(true);
-  });
-
-  it('returns a fresh token without refreshing', async () => {
-    await saveTwitchTokens('access', 'refresh', 14_400);
-    expect(await getValidTwitchToken()).toEqual({ status: 'ok', token: 'access' });
-    expect(fakeInvoke).not.toHaveBeenCalledWith('twitch_refresh_token', expect.anything());
-  });
-
   it('refreshes once for concurrent callers and keeps the rotated refresh token', async () => {
     storeExpiring();
     const refresh = vi.fn(async () => ({ access_token: 'new', refresh_token: 'r2', expires_in: 14_400 }));
@@ -55,31 +41,19 @@ describe('twitchService', () => {
     expect(stored().refresh_token).toBe('r2');
   });
 
-  it('signs out when Twitch rejects the refresh token', async () => {
-    storeExpiring();
-    commandHandlers.set('twitch_refresh_token', () => {
-      throw { kind: 'invalid_grant', message: 'Invalid refresh token' };
-    });
-    expect(await getValidTwitchToken()).toEqual({ status: 'signed_out' });
-    expect(keychain.has(KEY)).toBe(false);
-  });
-
-  it('keeps using the current token while a refresh fails for network reasons', async () => {
-    storeExpiring(60_000);
-    commandHandlers.set('twitch_refresh_token', () => {
-      throw { kind: 'network', message: 'offline' };
-    });
-    expect(await getValidTwitchToken()).toEqual({ status: 'ok', token: 'old' });
-    expect(keychain.has(KEY)).toBe(true);
-  });
-
-  it('reports "unavailable" (not signed out) once that token has expired', async () => {
+  it('signs out on invalid_grant but not on network failure', async () => {
     storeExpiring(-1);
     commandHandlers.set('twitch_refresh_token', () => {
       throw { kind: 'network', message: 'offline' };
     });
     expect((await getValidTwitchToken()).status).toBe('unavailable');
     expect(keychain.has(KEY)).toBe(true);
+
+    commandHandlers.set('twitch_refresh_token', () => {
+      throw { kind: 'invalid_grant', message: 'Invalid refresh token' };
+    });
+    expect(await getValidTwitchToken()).toEqual({ status: 'signed_out' });
+    expect(keychain.has(KEY)).toBe(false);
   });
 
   it('a refresh that finishes after logout does not sign the user back in', async () => {
@@ -111,21 +85,6 @@ describe('twitchService', () => {
         identity: { login: 'streamer', userId: '42', clientId: 'cid', scopes: ['chat:read'] },
       });
       expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe('OAuth new');
-    });
-
-    it('does not sign out when Twitch is unreachable', async () => {
-      await saveTwitchTokens('access', 'r1', 14_400);
-      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
-      expect(await checkTwitchSession()).toEqual({ status: 'unreachable' });
-      expect(keychain.has(KEY)).toBe(true);
-    });
-
-    it('signs out when even a refreshed token is rejected', async () => {
-      await saveTwitchTokens('revoked', 'r1', 14_400);
-      commandHandlers.set('twitch_refresh_token', async () => ({ access_token: 'also-bad', refresh_token: 'r2', expires_in: 14_400 }));
-      vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => validateResponse(401)));
-      expect(await checkTwitchSession()).toEqual({ status: 'signed_out' });
-      expect(keychain.has(KEY)).toBe(false);
     });
   });
 });

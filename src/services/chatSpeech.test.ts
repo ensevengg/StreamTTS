@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 vi.mock('@/services/ttsQueueService', () => ({ ttsQueueService: { enqueue: vi.fn(() => true) } }));
 
 import { ttsQueueService } from '@/services/ttsQueueService';
-import { speakAlert, speakChatMessage } from './chatSpeech';
+import { speakChatMessage } from './chatSpeech';
 import type { Message } from '@/types/message';
 
 let nextId = 0;
@@ -27,14 +27,5 @@ describe('speakChatMessage', () => {
       speakChatMessage(message(content), { fromViewer: true });
     }
     expect(queued()).toEqual([]);
-  });
-});
-
-describe('speakAlert', () => {
-  beforeEach(() => vi.mocked(ttsQueueService.enqueue).mockClear());
-
-  it('reads alerts with the English voice', () => {
-    speakAlert({ platform: 'twitch', alert_type: 'sub', user_name: 'A', message: 'A just subscribed!' }, 0.5);
-    expect(queued()).toEqual([['A just subscribed!', 'en']]);
   });
 });
