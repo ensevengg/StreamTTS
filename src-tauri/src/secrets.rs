@@ -44,3 +44,16 @@ pub fn secret_delete(key: String) -> Result<(), String> {
         Err(e) => Err(format!("failed to delete '{key}' from keychain: {e}")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_keys_outside_the_allowlist() {
+        // Fails before the OS keychain is touched.
+        assert!(secret_get("other".into()).is_err());
+        assert!(secret_set("other".into(), "x".into()).is_err());
+        assert!(secret_delete("other".into()).is_err());
+    }
+}
