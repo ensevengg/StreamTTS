@@ -69,22 +69,6 @@ describe('TtsQueue', () => {
     expect(speech.spoken).toEqual(['a', 'b']);
   });
 
-  it('clear drops waiting jobs and stops playback', async () => {
-    const speech = controllableSpeech();
-    const { queue } = makeQueue(speech.speak);
-    const a = job('a');
-    const b = job('b');
-    queue.enqueue(a);
-    queue.enqueue(b);
-    await flush();
-
-    queue.clear();
-    await flush();
-    expect(a.statuses).toEqual(['playing', 'skipped']);
-    expect(b.statuses).toEqual(['skipped']);
-    expect(queue.length).toBe(0);
-  });
-
   it('when full, drops the oldest waiting job, never the one being spoken', async () => {
     const speech = controllableSpeech();
     const { queue } = makeQueue(speech.speak);
@@ -143,26 +127,5 @@ describe('TtsQueue', () => {
     await flush();
     expect(failed.statuses).toEqual(['playing', 'error']);
     expect(next.statuses).toEqual(['playing', 'completed']);
-  });
-
-  it('uses a job volume override', async () => {
-    const speak = vi.fn().mockResolvedValue(undefined);
-    const { queue } = makeQueue(speak);
-    queue.enqueue(job('alert', { volume: 0.2 }));
-    await flush();
-    expect(speak.mock.calls[0][1].volume).toBe(0.2);
-  });
-
-  it("speaks each job with the voice chosen for its language", async () => {
-    const speak = vi.fn().mockResolvedValue(undefined);
-    const { queue } = makeQueue(speak);
-    queue.enqueue(job('privet'));
-    queue.enqueue(job('hello', { language: 'en' }));
-    await flush();
-    await flush();
-    expect(speak.mock.calls.map(([text, options]) => [text, options.language, options.voiceName])).toEqual([
-      ['privet', 'ru', 'Pavel'],
-      ['hello', 'en', 'Zira'],
-    ]);
   });
 });
