@@ -10,8 +10,12 @@ export default defineConfig({
     include: ['src/**/*.test.ts'],
   },
   server: {
-    host: "::",
+    // Loopback only: the dev server serves project files (including .env),
+    // so it must not be reachable from the local network.
+    host: "localhost",
+    // Tauri's devUrl expects exactly this port; fail instead of moving.
     port: 8080,
+    strictPort: true,
     hmr: {
       overlay: false
     }
