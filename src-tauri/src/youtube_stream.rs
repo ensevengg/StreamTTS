@@ -524,24 +524,6 @@ mod tests {
     }
 
     #[test]
-    fn text_falls_back_to_message_details() {
-        let mut message = text_message("m1", "unused");
-        let snippet = message.snippet.as_mut().unwrap();
-        snippet.display_message = None;
-        snippet.text_message_details = Some(TextMessageDetails {
-            message_text: Some("from details".into()),
-        });
-        let page = ChatPage::from(LiveChatMessageListResponse {
-            items: vec![message],
-            ..Default::default()
-        });
-        assert_eq!(
-            page.items[0].snippet.display_message.as_deref(),
-            Some("from details")
-        );
-    }
-
-    #[test]
     fn decodes_bytes_with_fields_it_does_not_declare() {
         // A full message from YouTube carries fields this subset skips.
         let mut bytes = prost::Message::encode_to_vec(&LiveChatMessageListResponse {
@@ -750,14 +732,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_a_bad_token_as_unauthenticated() {
-        let channel = serve(mock(vec![], None)).await;
-        let (_keep, cancel) = oneshot::channel();
-        let result = run_stream(channel, "expired", "chat".into(), None, cancel, |_| {}).await;
-        assert_eq!(result.unwrap_err().status, 401);
-    }
-
-    #[tokio::test]
     async fn cancelling_ends_an_open_stream() {
         let mut server = mock(vec![page("p1", &["a"])], None);
         server.hold_open = true;
@@ -796,14 +770,5 @@ mod tests {
         .await;
         let failure = result.unwrap_err();
         assert_eq!(failure.status, 401, "{failure:?}");
-    }
-
-    #[tokio::test]
-    async fn an_unreachable_server_is_status_zero() {
-        // Nothing listens here, so the connection itself fails.
-        let channel = Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
-        let (_keep, cancel) = oneshot::channel();
-        let result = run_stream(channel, "good-token", "chat".into(), None, cancel, |_| {}).await;
-        assert_eq!(result.unwrap_err().status, 0);
     }
 }

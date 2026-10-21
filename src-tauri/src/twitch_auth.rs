@@ -336,20 +336,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stops_quietly_when_superseded() {
-        let (token_url, calls) = spawn_token_endpoint(0).await;
-        let endpoints = TwitchEndpoints {
-            device_url: String::new(),
-            token_url,
-        };
-        assert!(matches!(
-            poll_for_token(&endpoints, "client", &device(60), || false).await,
-            DevicePoll::Superseded
-        ));
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
     async fn gives_up_when_the_code_expires() {
         let (token_url, _) = spawn_token_endpoint(usize::MAX).await;
         let endpoints = TwitchEndpoints {

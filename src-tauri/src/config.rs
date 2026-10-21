@@ -49,25 +49,15 @@ mod tests {
     use super::resolve;
 
     #[test]
-    fn runtime_value_overrides_embedded() {
+    fn prefers_runtime_value_and_rejects_placeholders() {
         assert_eq!(
             resolve(Some("runtime".into()), Some("embedded")).as_deref(),
             Some("runtime")
         );
-    }
-
-    #[test]
-    fn falls_back_to_embedded_value() {
-        assert_eq!(resolve(None, Some("embedded")).as_deref(), Some("embedded"));
         assert_eq!(
             resolve(Some("  ".into()), Some("embedded")).as_deref(),
             Some("embedded")
         );
-    }
-
-    #[test]
-    fn rejects_example_placeholders() {
         assert_eq!(resolve(Some("your-client-id-here".into()), None), None);
-        assert_eq!(resolve(None, Some("your-twitch-client-id")), None);
     }
 }

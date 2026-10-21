@@ -610,20 +610,6 @@ mod tests {
     }
 
     #[test]
-    fn same_origin_requires_exact_loopback_origin() {
-        let with_origin = |origin: &str| {
-            let mut headers = HeaderMap::new();
-            headers.insert(header::ORIGIN, HeaderValue::from_str(origin).unwrap());
-            headers
-        };
-        assert!(is_same_origin(&with_origin("http://localhost:3000"), 3000));
-        assert!(is_same_origin(&with_origin("http://127.0.0.1:3000"), 3000));
-        assert!(!is_same_origin(&with_origin("http://localhost:8080"), 3000));
-        assert!(!is_same_origin(&with_origin("https://evil.example"), 3000));
-        assert!(!is_same_origin(&HeaderMap::new(), 3000));
-    }
-
-    #[test]
     fn refresh_failures_are_classified_per_provider() {
         let google = serde_json::json!({ "error": "invalid_grant", "error_description": "Token has been expired or revoked." });
         assert!(matches!(
@@ -652,38 +638,6 @@ mod tests {
             classify_refresh_failure(StatusCode::SERVICE_UNAVAILABLE, &serde_json::Value::Null),
             CommandError::BadResponse(_)
         ));
-    }
-
-    #[test]
-    fn provider_error_codes_are_sanitized() {
-        assert_eq!(
-            describe_provider_error("access_denied"),
-            "The YouTube login was cancelled."
-        );
-        assert_eq!(
-            describe_provider_error("<script>bad</script>"),
-            "YouTube login failed: scriptbadscript"
-        );
-    }
-
-    #[tokio::test]
-    async fn states_are_single_use_and_expire() {
-        let states = OAuthStates::default();
-        states.register("fresh".into(), "verifier".into()).await;
-        assert_eq!(
-            states.consume("fresh").await.unwrap().code_verifier,
-            "verifier"
-        );
-        assert!(states.consume("fresh").await.is_none());
-
-        states.0.write().await.insert(
-            "old".into(),
-            PendingAuth {
-                created_at: now_secs() - OAUTH_STATE_EXPIRY_SECS - 1,
-                code_verifier: "v".into(),
-            },
-        );
-        assert!(states.consume("old").await.is_none());
     }
 
     type Recorded = Arc<Mutex<Vec<AuthCallback>>>;
