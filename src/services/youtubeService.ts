@@ -1,9 +1,12 @@
-import { invoke } from '@tauri-apps/api/core';
-import { Message } from '@/types/message';
-import { isTauriAvailable } from '@/lib/tauri-api';
+import { Channel, invoke, isSignedOutError, isTauriAvailable, type RefreshedTokens } from '@/lib/tauri-api';
 import { secureGet, secureSet, secureDelete } from '@/lib/secureStorage';
+import { errorMessage, fetchJson } from '@/lib/http';
 
 const YOUTUBE_TOKEN_KEY = 'youtube_oauth_tokens';
+const API_BASE = 'https://www.googleapis.com/youtube/v3';
+/** Refresh this long before the 1-hour access token runs out. */
+const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
+const REQUEST_TIMEOUT_MS = 20_000;
 
 export interface YouTubeTokens {
   access_token: string;
@@ -11,21 +14,17 @@ export interface YouTubeTokens {
   expires_at: number;
 }
 
-interface TokenResponse {
-  access_token: string;
-  refresh_token?: string;
-  expires_in: number;
-  token_type: string;
-}
+/** Same contract as the Twitch service: `unavailable` is retryable. */
+export type TokenResult =
+  | { status: 'ok'; token: string }
+  | { status: 'signed_out' }
+  | { status: 'unavailable'; reason: string };
 
-let refreshPromise: Promise<string | null> | null = null;
+// Bumped on logout so an in-flight refresh can't restore a cleared session.
+let sessionGeneration = 0;
+let refreshInFlight: Promise<TokenResult> | null = null;
 
-export const hasYoutubeOAuthToken = async (): Promise<boolean> => {
-  const tokens = await getStoredTokens();
-  return !!tokens && !!tokens.access_token;
-};
-
-export const getStoredTokens = async (): Promise<YouTubeTokens | null> => {
+const getStoredTokens = async (): Promise<YouTubeTokens | null> => {
   try {
     const stored = await secureGet(YOUTUBE_TOKEN_KEY);
     if (!stored) return null;
@@ -35,391 +34,246 @@ export const getStoredTokens = async (): Promise<YouTubeTokens | null> => {
   }
 };
 
+export const hasYoutubeOAuthToken = async (): Promise<boolean> =>
+  !!(await getStoredTokens())?.access_token;
+
 export const saveYoutubeTokens = async (tokens: YouTubeTokens): Promise<void> => {
   await secureSet(YOUTUBE_TOKEN_KEY, JSON.stringify(tokens));
 };
 
 export const clearYoutubeOAuthToken = async (): Promise<void> => {
+  sessionGeneration += 1;
   await secureDelete(YOUTUBE_TOKEN_KEY);
 };
 
-const refreshYoutubeToken = async (): Promise<string | null> => {
-  if (refreshPromise) {
-    return refreshPromise;
-  }
-
-  refreshPromise = doRefresh();
-  const result = await refreshPromise;
-  refreshPromise = null;
-  return result;
-};
-
-const doRefresh = async (): Promise<string | null> => {
+const doRefresh = async (): Promise<TokenResult> => {
   const tokens = await getStoredTokens();
-  if (!tokens || !tokens.refresh_token) {
-    console.log("YouTubeService: No refresh token available");
-    return null;
-  }
-
+  if (!tokens?.refresh_token) return { status: 'signed_out' };
   if (!isTauriAvailable()) {
-    console.warn("YouTubeService: Token refresh requires the StreamTTS desktop app");
-    return null;
+    return { status: 'unavailable', reason: 'Token refresh requires the StreamTTS desktop app' };
   }
 
-  const maxRetries = 3;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      const data: TokenResponse = await invoke('youtube_refresh_token', {
-        refreshToken: tokens.refresh_token,
-      });
-
-      const newTokens: YouTubeTokens = {
-        access_token: data.access_token,
-        refresh_token: data.refresh_token || tokens.refresh_token,
-        expires_at: Date.now() + (data.expires_in * 1000),
-      };
-
-      await saveYoutubeTokens(newTokens);
-      console.log("YouTubeService: Token refreshed successfully");
-      return data.access_token;
-    } catch (error) {
-      const err = error as { kind?: string };
-      console.error("YouTubeService: Token refresh failed", err);
-
-      if (err?.kind === 'invalid_grant' || err?.kind === 'invalid_client') {
-        console.log("YouTubeService: Refresh token is invalid, clearing tokens");
-        await clearYoutubeOAuthToken();
-        return null;
-      }
-
-      if (err?.kind === 'not_configured') {
-        return null;
-      }
-
-      if (attempt < maxRetries - 1) {
-        const delay = 1000 * (attempt + 1);
-        console.log(`YouTubeService: Refresh attempt ${attempt + 1} failed, retrying in ${delay}ms...`);
-        await new Promise(r => setTimeout(r, delay));
-      }
-    }
-  }
-
-  console.log("YouTubeService: All refresh attempts failed, keeping existing tokens");
-  return null;
-};
-
-export const getValidYoutubeToken = async (): Promise<string | null> => {
-  const tokens = await getStoredTokens();
-  if (!tokens || !tokens.access_token) {
-    return null;
-  }
-
-  const bufferMs = 5 * 60 * 1000;
-  if (Date.now() >= (tokens.expires_at - bufferMs)) {
-    console.log("YouTubeService: Token expired or expiring soon, refreshing...");
-    const newToken = await refreshYoutubeToken();
-    if (newToken) return newToken;
-
-    if (tokens.access_token && Date.now() < tokens.expires_at) {
-      console.log("YouTubeService: Refresh failed, using existing token as fallback");
-      return tokens.access_token;
-    }
-    return null;
-  }
-
-  return tokens.access_token;
-};
-
-export const getYoutubeOAuthToken = async (): Promise<string | null> => {
-  const tokens = await getStoredTokens();
-  return tokens?.access_token || null;
-};
-
-export const validateToken = async (token: string): Promise<boolean> => {
+  const generation = sessionGeneration;
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    
-    const response = await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true', {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      },
-      signal: controller.signal
+    const data = await invoke<RefreshedTokens>('youtube_refresh_token', {
+      refreshToken: tokens.refresh_token,
     });
-    
-    clearTimeout(timeoutId);
-    
-    if (response.ok) {
-      return true;
-    } else {
-      console.error(`YouTubeService: Token validation failed (${response.status})`);
-      return false;
-    }
+    if (generation !== sessionGeneration) return { status: 'signed_out' };
+    await saveYoutubeTokens({
+      access_token: data.access_token,
+      refresh_token: data.refresh_token || tokens.refresh_token,
+      expires_at: Date.now() + (data.expires_in ?? 3600) * 1000,
+    });
+    return { status: 'ok', token: data.access_token };
   } catch (error) {
-    console.error("YouTubeService: Token validation error", error);
-    return false;
+    if (isSignedOutError(error)) {
+      if (generation === sessionGeneration) await clearYoutubeOAuthToken();
+      return { status: 'signed_out' };
+    }
+    return { status: 'unavailable', reason: errorMessage(error) };
   }
 };
 
-export const fetchYouTubeLiveBroadcasts = async (): Promise<any[]> => {
-  try {
-    const token = await getValidYoutubeToken();
-    if (!token) {
-      console.error("YouTube Service: No OAuth token available");
-      throw new Error('Please log in to YouTube first.');
-    }
-
-    if (typeof token !== 'string' || token.trim().length === 0) {
-      console.error("YouTube Service: Invalid token format");
-      throw new Error('Your session is invalid. Please log in again.');
-    }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      controller.abort();
-    }, 20000);
-    
-    const response = await fetch(
-      'https://www.googleapis.com/youtube/v3/liveBroadcasts?part=snippet,contentDetails&broadcastStatus=active',
-      {
-        headers: {
-          Authorization: `Bearer ${token}`
-        },
-        signal: controller.signal
-      }
-    );
-    
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      let errorData;
-      try {
-        errorData = await response.json();
-      } catch (parseError) {
-        errorData = { error: { message: `HTTP ${response.status}` } };
-      }
-      console.error('YouTube API error:', errorData);
-      
-      if (response.status === 401) {
-        await clearYoutubeOAuthToken();
-        throw new Error('Your YouTube session has expired. Please log in again.');
-      }
-      
-      if (response.status === 403) {
-        const errorText = await response.text();
-        if (errorText.includes('quotaExceeded') || errorText.includes('dailyLimitExceeded')) {
-          throw new Error("YouTube's daily limit reached. Please try again tomorrow.");
-        } else if (errorText.includes('liveStreamingNotEnabled')) {
-          throw new Error('Live streaming is not enabled on your channel. Enable it in YouTube Studio.');
-        } else if (errorText.includes('insufficientPermissions')) {
-          throw new Error('Permission denied. Please log out and log back in.');
-        } else {
-          throw new Error('Access denied. Please log out and log back in.');
-        }
-      }
-      
-      const errorMessage = errorData.error?.message || 'Unknown error';
-      throw new Error(`Something went wrong. Please try again.`);
-    }
-
-    let data;
-    try {
-      data = await response.json();
-    } catch (jsonError) {
-      console.error("YouTube Service: Failed to parse JSON response:", jsonError);
-      throw new Error('Something went wrong. Please try again.');
-    }
-    
-    if (!data || typeof data !== 'object') {
-      console.error("YouTube Service: Invalid response structure:", data);
-      throw new Error('Something went wrong. Please try again.');
-    }
-    
-    if (!data.items || data.items.length === 0) {
-      return [];
-    }
-    
-    return data.items;
-  } catch (error) {
-    console.error('Error fetching YouTube broadcasts:', error);
-    
-    if (error instanceof Error && error.name === 'AbortError') {
-      console.error('YouTube Service: Broadcast fetch timed out');
-      throw new Error('Could not connect to YouTube. Check your internet and try again.');
-    }
-    
-    console.error('YouTube Service: Error fetching broadcasts:', error);
-    throw error;
+/** Concurrent callers share one refresh request. */
+const refreshYoutubeToken = (): Promise<TokenResult> => {
+  if (!refreshInFlight) {
+    refreshInFlight = doRefresh().finally(() => {
+      refreshInFlight = null;
+    });
   }
+  return refreshInFlight;
 };
 
-async function fetchLiveChatId(broadcastId: string): Promise<string> {
-  const token = await getValidYoutubeToken();
-  if (!token) throw new Error('Please log in to YouTube first.');
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20000);
-
-  const response = await fetch(
-    `https://www.googleapis.com/youtube/v3/liveBroadcasts?part=snippet,contentDetails&id=${broadcastId}`,
-    { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal }
-  );
-  clearTimeout(timeout);
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({ error: { message: `HTTP ${response.status}` } }));
-    if (response.status === 401) { await clearYoutubeOAuthToken(); throw new Error('Your YouTube session has expired. Please log in again.'); }
-    if (response.status === 403) throw new Error('Permission denied. Please log out and log back in.');
-    throw new Error('Something went wrong. Please try again.');
+export const getValidYoutubeToken = async (): Promise<TokenResult> => {
+  const tokens = await getStoredTokens();
+  if (!tokens?.access_token) return { status: 'signed_out' };
+  if (Date.now() < tokens.expires_at - TOKEN_EXPIRY_BUFFER_MS) {
+    return { status: 'ok', token: tokens.access_token };
   }
 
-  const data = await response.json();
-  if (!data.items?.length) throw new Error('Stream not found. It may have ended.');
-  if (!data.items[0].snippet.liveChatId) throw new Error('Chat is not available. The stream may have ended.');
-  return data.items[0].snippet.liveChatId;
+  const refreshed = await refreshYoutubeToken();
+  if (refreshed.status !== 'unavailable') return refreshed;
+  // Refresh failed for now; the current token still works until it expires.
+  return Date.now() < tokens.expires_at ? { status: 'ok', token: tokens.access_token } : refreshed;
+};
+
+/** After a 401 the stored token is dead even if our clock disagrees. */
+export const invalidateYoutubeAccessToken = async (): Promise<void> => {
+  const tokens = await getStoredTokens();
+  if (tokens) await saveYoutubeTokens({ ...tokens, expires_at: 0 });
+};
+
+export class YouTubeApiError extends Error {
+  constructor(
+    readonly status: number,
+    /** errors[0].reason from the API body, e.g. quotaExceeded, liveChatEnded. */
+    readonly reason: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'YouTubeApiError';
+  }
 }
 
-class YouTubeChatPoller {
-  private liveChatId: string;
-  private onMessage: (message: any) => void;
-  private onError: (error: Error) => void;
-  private nextPageToken: string | null = null;
-  private errorCount = 0;
-  private isConnected = false;
-  private timeoutId: ReturnType<typeof setTimeout> | null = null;
-  private readonly MAX_ERRORS = 3;
+export const parseYouTubeError = (status: number, body: unknown): YouTubeApiError => {
+  const error = (body as { error?: { message?: string; status?: string; errors?: { reason?: string }[] } })?.error;
+  const reason = error?.errors?.[0]?.reason ?? error?.status ?? '';
+  return new YouTubeApiError(status, reason, error?.message || `YouTube API error ${status}`);
+};
 
-  constructor(liveChatId: string, onMessage: (message: any) => void, onError: (error: Error) => void) {
-    this.liveChatId = liveChatId;
-    this.onMessage = onMessage;
-    this.onError = onError;
+const youtubeGet = async (
+  path: string,
+  params: Record<string, string>,
+  token: string,
+  signal?: AbortSignal,
+): Promise<unknown> => {
+  const url = new URL(`${API_BASE}/${path}`);
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+  const response = await fetchJson(
+    url.toString(),
+    { headers: { Authorization: `Bearer ${token}` } },
+    { timeoutMs: REQUEST_TIMEOUT_MS, signal },
+  );
+  if (!response.ok) throw parseYouTubeError(response.status, response.body);
+  return response.body;
+};
+
+export interface LiveBroadcast {
+  id: string;
+  snippet?: { title?: string; liveChatId?: string };
+}
+
+/**
+ * The signed-in channel's live broadcasts. broadcastType=all matters: the API
+ * default ("event") leaves out persistent "Stream now" broadcasts.
+ */
+export const fetchActiveBroadcasts = async (token: string, signal?: AbortSignal): Promise<LiveBroadcast[]> => {
+  const body = await youtubeGet(
+    'liveBroadcasts',
+    { part: 'snippet', broadcastStatus: 'active', broadcastType: 'all', maxResults: '10' },
+    token,
+    signal,
+  ) as { items?: LiveBroadcast[] };
+  return body?.items ?? [];
+};
+
+export interface LiveChatItem {
+  id: string;
+  snippet?: {
+    type?: string;
+    publishedAt?: string;
+    displayMessage?: string;
+    superChatDetails?: { amountDisplayString?: string; userComment?: string };
+    superStickerDetails?: { amountDisplayString?: string };
+    newSponsorDetails?: { memberLevelName?: string; isUpgrade?: boolean };
+    membershipGiftingDetails?: { giftMembershipsCount?: number };
+    memberMilestoneChatDetails?: { memberMonth?: number; userComment?: string };
+  };
+  authorDetails?: { displayName?: string; channelId?: string };
+}
+
+export interface LiveChatPage {
+  items?: LiveChatItem[];
+  nextPageToken?: string;
+  pollingIntervalMillis?: number;
+}
+
+export const fetchLiveChatPage = async (
+  token: string,
+  liveChatId: string,
+  pageToken: string | null,
+  signal?: AbortSignal,
+): Promise<LiveChatPage> => {
+  const params: Record<string, string> = { liveChatId, part: 'snippet,authorDetails', maxResults: '200' };
+  if (pageToken) params.pageToken = pageToken;
+  return await youtubeGet('liveChat/messages', params, token, signal) as LiveChatPage;
+};
+
+export const fetchOwnChannelTitle = async (token: string): Promise<string | null> => {
+  const body = await youtubeGet('channels', { part: 'snippet', mine: 'true' }, token) as {
+    items?: { snippet?: { title?: string } }[];
+  };
+  return body?.items?.[0]?.snippet?.title ?? null;
+};
+
+/** Streaming isn't possible here (no desktop backend, or YouTube refused the method). */
+export class StreamUnavailableError extends Error {
+  name = 'StreamUnavailableError';
+}
+
+/** The gRPC connection to YouTube couldn't be made at all. */
+export class StreamTransportError extends Error {
+  name = 'StreamTransportError';
+}
+
+interface StreamFailure {
+  status: number;
+  reason: string;
+  message: string;
+}
+
+type StreamEvent =
+  | { event: 'page'; page: LiveChatPage }
+  | { event: 'end'; error: StreamFailure | null };
+
+const streamFailureToError = (failure: StreamFailure): Error => {
+  if (failure.reason === 'streamUnsupported') return new StreamUnavailableError(failure.message);
+  if (failure.status === 0) return new StreamTransportError(failure.message);
+  return new YouTubeApiError(failure.status, failure.reason, failure.message);
+};
+
+let nextStreamId = 1;
+
+/**
+ * Receives live chat over liveChatMessages.streamList (see
+ * youtube_stream.rs): YouTube pushes pages down one long-lived call instead
+ * of being polled, which costs a fraction of the daily quota. Resolves when
+ * YouTube closes the stream or `signal` aborts; rejects with the same
+ * YouTubeApiError a poll would, or with StreamUnavailableError /
+ * StreamTransportError when streaming itself doesn't work.
+ */
+export const streamLiveChat = (
+  token: string,
+  liveChatId: string,
+  pageToken: string | null,
+  onPage: (page: LiveChatPage) => void,
+  signal: AbortSignal,
+): Promise<void> => {
+  if (!isTauriAvailable()) {
+    return Promise.reject(new StreamUnavailableError('Streaming chat needs the StreamTTS desktop app'));
   }
+  const streamId = nextStreamId++;
 
-  start(): void {
-    this.isConnected = true;
-    this.timeoutId = setTimeout(() => this.poll(), 1000);
-  }
-
-  disconnect(): void {
-    this.isConnected = false;
-    if (this.timeoutId) {
-      clearTimeout(this.timeoutId);
-      this.timeoutId = null;
-    }
-  }
-
-  private async poll(): Promise<void> {
-    if (!this.isConnected) return;
-
-    try {
-      const token = await getValidYoutubeToken();
-      if (!token) throw new Error('YouTube authentication expired. Please log in again.');
-
-      const url = new URL('https://www.googleapis.com/youtube/v3/liveChat/messages');
-      url.searchParams.append('part', 'snippet,authorDetails');
-      url.searchParams.append('liveChatId', this.liveChatId);
-      url.searchParams.append('maxResults', '200');
-      if (this.nextPageToken) url.searchParams.append('pageToken', this.nextPageToken);
-
-      const controller = new AbortController();
-      const fetchTimeout = setTimeout(() => controller.abort(), 20000);
-
-      const response = await fetch(url.toString(), {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: controller.signal,
-      });
-      clearTimeout(fetchTimeout);
-
-      if (!response.ok) {
-        await this.handleApiError(response);
-        return;
-      }
-
-      const data = await response.json();
-      this.nextPageToken = data.nextPageToken;
-      this.errorCount = 0;
-
-      if (data.items?.length > 0) {
-        for (const msg of data.items) {
-          if (msg.snippet?.type === 'textMessageEvent') {
-            this.onMessage({
-              id: msg.id,
-              authorDetails: msg.authorDetails,
-              snippet: msg.snippet,
-              userColor: generateColorFromChannelId(msg.authorDetails.channelId),
-            });
-          }
-        }
-      }
-
-      if (this.isConnected) {
-        const interval = data.pollingIntervalMillis || 10000;
-        this.timeoutId = setTimeout(() => this.poll(), interval);
-      }
-    } catch (error) {
-      await this.handlePollError(error);
-    }
-  }
-
-  private async handleApiError(response: Response): Promise<void> {
-    const errorData = await response.json().catch(() => ({ error: { message: `HTTP ${response.status}` } }));
-    console.error('YouTube chat API error:', errorData);
-
-    if (response.status === 401) { await clearYoutubeOAuthToken(); throw new Error('Your YouTube session has expired. Please log in again.'); }
-    if (response.status === 403) throw new Error('Permission denied. Please log out and log back in.');
-    if (response.status === 429) throw new Error('Too many requests. Wait a moment and try again.');
-    throw new Error('Something went wrong. Please try again.');
-  }
-
-  private async handlePollError(error: unknown): Promise<void> {
-    this.errorCount++;
-    console.error('YouTube chat poll error:', error);
-
-    if (this.errorCount >= this.MAX_ERRORS) {
-      console.error(`YouTube: Too many consecutive errors (${this.errorCount}), stopping polling`);
-      this.onError(error instanceof Error ? error : new Error(String(error)));
-      this.isConnected = false;
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onAbort = () => {
+      invoke('youtube_chat_stream_stop', { streamId }).catch(() => {});
+      finish();
+    };
+    if (signal.aborted) {
+      finish();
       return;
     }
+    signal.addEventListener('abort', onAbort, { once: true });
 
-    if (this.isConnected) {
-      const delay = Math.min(15000 * this.errorCount, 60000);
-      this.timeoutId = setTimeout(() => this.poll(), delay);
-    }
-  }
-}
-
-export const connectToYouTubeLiveChat = async (
-  broadcastId: string,
-  onMessage: (message: any) => void,
-  onError: (error: Error) => void
-): Promise<{ disconnect: () => void }> => {
-  try {
-    const liveChatId = await fetchLiveChatId(broadcastId);
-    const poller = new YouTubeChatPoller(liveChatId, onMessage, onError);
-    poller.start();
-    return { disconnect: () => poller.disconnect() };
-  } catch (error) {
-    console.error('Error connecting to YouTube chat:', error);
-
-    if (error instanceof Error && error.name === 'AbortError') {
-      const timeoutError = new Error('Could not connect to YouTube. Please try again.');
-      onError(timeoutError);
-      throw timeoutError;
-    }
-
-    onError(error as Error);
-    throw error;
-  }
+    // Pages and the final event share one channel, so they arrive in order.
+    const channel = new Channel<StreamEvent>();
+    channel.onmessage = (event) => {
+      if (settled) return;
+      if (event.event === 'page') {
+        onPage(event.page);
+      } else {
+        finish(event.error ? streamFailureToError(event.error) : undefined);
+      }
+    };
+    invoke('youtube_chat_stream', { streamId, accessToken: token, liveChatId, pageToken, onEvent: channel })
+      .catch((error) => finish(new StreamUnavailableError(errorMessage(error))));
+  });
 };
-
-export function generateColorFromChannelId(channelId: string): string {
-  let hash = 0;
-  for (let i = 0; i < channelId.length; i++) {
-    hash = channelId.charCodeAt(i) + ((hash << 5) - hash);
-  }
-
-  const hue = Math.abs(hash % 360);
-  return `hsl(${hue}, 70%, 50%)`;
-}

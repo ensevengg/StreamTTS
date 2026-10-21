@@ -3,12 +3,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, Volume2, MessageSquare, Settings, Radio, Heart, Info, LogIn, ChevronDown, ChevronRight } from 'lucide-react';
+import { Mic, MessageSquare, Settings, Radio, Heart, Info, ChevronDown, ChevronRight, SkipForward, ListX } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
+import { Button } from '@/components/ui/button';
+import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import VoiceSelect from '@/components/VoiceSelect';
 
 // Lazy load components with prefetch to avoid UI jank
 const MessageInput = lazy(() => import('@/components/MessageInput'));
@@ -20,12 +22,16 @@ const ConnectionStatusPanel = lazy(() => import('@/components/ConnectionStatusPa
 const AlertSettings = lazy(() => import('@/components/AlertSettings'));
 
 import { Message } from '@/types/message';
-import { getAvailableBrowserVoices } from '@/services/ttsService';
+import { defaultVoiceFor, getAvailableBrowserVoices } from '@/services/ttsService';
+import { ttsQueueService } from '@/services/ttsQueueService';
+import { speakChatMessage } from '@/services/chatSpeech';
 import { useChatStore } from '@/stores/chatStore';
-import { useSettingsStore, TTSProvider } from '@/stores/settingsStore';
-import { useTtsQueue } from '@/hooks/useTtsQueue';
-import { useAuthStore } from '@/stores/authStore';
-import { useOAuthCallback } from '@/hooks/useOAuthCallback';
+import {
+  useSettingsStore,
+  TTSProvider,
+  TTS_COOLDOWN_RANGE_SEC,
+  TTS_MAX_LENGTH_RANGE,
+} from '@/stores/settingsStore';
 
 const Index = () => {
   const { toast } = useToast();
@@ -33,17 +39,6 @@ const Index = () => {
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [ttsInitialized, setTtsInitialized] = useState<boolean>(false);
 
-  // Mounted here (not inside a tab) so the auth-callback listener stays alive
-  // no matter which tab is active while the OAuth browser window is open.
-  const setTwitchAuth = useAuthStore(s => s.setTwitchAuth);
-  const setYoutubeAuth = useAuthStore(s => s.setYoutubeAuth);
-  useOAuthCallback({
-    onTwitchAuth: useCallback(() => setTwitchAuth(true), [setTwitchAuth]),
-    onYoutubeAuth: useCallback(() => setYoutubeAuth(true), [setYoutubeAuth]),
-    toast,
-  });
-
-  const messages = useChatStore(s => s.messages);
   const activeTab = useChatStore(s => s.activeTab);
   const isProcessing = useChatStore(s => s.isProcessing);
   const addMessage = useChatStore(s => s.addMessage);
@@ -53,12 +48,16 @@ const Index = () => {
   const volume = useSettingsStore(s => s.volume);
   const ttsProvider = useSettingsStore(s => s.ttsProvider);
   const selectedVoice = useSettingsStore(s => s.selectedVoice);
+  const englishVoice = useSettingsStore(s => s.englishVoice);
   const setApiKey = useSettingsStore(s => s.setApiKey);
   const setVolume = useSettingsStore(s => s.setVolume);
   const setTtsProvider = useSettingsStore(s => s.setTtsProvider);
   const setSelectedVoice = useSettingsStore(s => s.setSelectedVoice);
-
-  const { enqueue } = useTtsQueue();
+  const setEnglishVoice = useSettingsStore(s => s.setEnglishVoice);
+  const ttsMaxLength = useSettingsStore(s => s.ttsMaxLength);
+  const ttsViewerCooldownSec = useSettingsStore(s => s.ttsViewerCooldownSec);
+  const setTtsMaxLength = useSettingsStore(s => s.setTtsMaxLength);
+  const setTtsViewerCooldownSec = useSettingsStore(s => s.setTtsViewerCooldownSec);
 
   useEffect(() => {
     if (activeTab === 'chat' && !ttsInitialized) {
@@ -67,26 +66,14 @@ const Index = () => {
         setAvailableVoices(voices);
         
         if (!selectedVoice) {
-          const pavelVoice = voices.find(v => 
-            v.name.includes('Pavel') || 
-            v.name.includes('Microsoft Pavel')
-          );
-          
-          if (pavelVoice) {
-            setSelectedVoice(pavelVoice.name);
-          } else {
-            const russianVoice = voices.find(v => 
-              v.lang.startsWith('ru') || 
-              v.name.includes('Russian') || 
-              v.name.includes('русский')
-            );
-            
-            if (russianVoice) {
-              setSelectedVoice(russianVoice.name);
-            }
-          }
+          const voice = defaultVoiceFor(voices, 'ru');
+          if (voice) setSelectedVoice(voice.name);
         }
-        
+        if (!englishVoice) {
+          const voice = defaultVoiceFor(voices, 'en');
+          if (voice) setEnglishVoice(voice.name);
+        }
+
         setTtsInitialized(true);
       };
       
@@ -106,7 +93,7 @@ const Index = () => {
         }
       }
     }
-  }, [activeTab, ttsInitialized, selectedVoice, setSelectedVoice]);
+  }, [activeTab, ttsInitialized, selectedVoice, setSelectedVoice, englishVoice, setEnglishVoice]);
 
   const handleApiKeySubmit = useCallback((key: string) => {
     setApiKey(key);
@@ -115,6 +102,11 @@ const Index = () => {
       title: "API Key Saved",
       description: "Your ElevenLabs API key has been saved"
     });
+  }, [setApiKey, toast]);
+
+  const handleApiKeyRemove = useCallback(() => {
+    setApiKey('');
+    toast({ title: "API Key Removed", description: "Your ElevenLabs API key was deleted" });
   }, [setApiKey, toast]);
 
   const handleVolumeChange = useCallback((value: number) => {
@@ -134,22 +126,17 @@ const Index = () => {
     });
   }, [setTtsProvider, toast]);
 
-  const handleVoiceChange = useCallback((voice: string) => {
-    setSelectedVoice(voice);
-  }, [setSelectedVoice]);
-
-  const handleSendMessage = useCallback((content: string, username?: string) => {
+  const handleSendMessage = useCallback((content: string) => {
     const newMessage: Message = {
-      id: Date.now().toString(),
+      id: `manual-${crypto.randomUUID()}`,
       content,
       timestamp: Date.now(),
-      username: username || 'You',
-      status: 'pending'
+      username: 'You',
     };
-    
+
     addMessage(newMessage);
-    enqueue(newMessage);
-  }, [addMessage, enqueue]);
+    speakChatMessage(newMessage, { fromViewer: false });
+  }, [addMessage]);
 
   return (
     <div className="min-h-screen p-4 md:p-8 bg-stream-bg flex flex-col">
@@ -204,11 +191,19 @@ const Index = () => {
               <Suspense fallback={<div className="p-4">Loading...</div>}>
                 <TabsContent value="chat" className="space-y-4 flex-1 flex flex-col">
                   <div className="flex-1 overflow-y-auto">
-                    <MessageHistory messages={messages} />
+                    <MessageHistory />
                   </div>
                   
-                  <div className="flex justify-center my-4">
+                  <div className="flex flex-wrap items-center justify-center gap-3 my-4">
                     <VolumeControl volume={volume} onVolumeChange={handleVolumeChange} />
+                    <Button variant="outline" size="sm" onClick={() => ttsQueueService.skip()} disabled={!isProcessing}>
+                      <SkipForward className="h-4 w-4 mr-1" />
+                      Skip
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => ttsQueueService.clear()} disabled={!isProcessing}>
+                      <ListX className="h-4 w-4 mr-1" />
+                      Clear queue
+                    </Button>
                   </div>
                   
                   <MessageInput onSendMessage={handleSendMessage} ttsProvider={ttsProvider} />
@@ -245,32 +240,66 @@ const Index = () => {
                     </div>
                     
                     {ttsProvider === 'browser' && (
-                      <div className="rounded-lg border p-4">
-                        <h4 className="font-medium mb-2">Voice Selection</h4>
-                        <Select value={selectedVoice} onValueChange={handleVoiceChange}>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select a voice" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {availableVoices.map((voice) => (
-                              <SelectItem 
-                                key={voice.name} 
-                                value={voice.name}
-                              >
-                                {voice.name} {voice.lang ? `(${voice.lang})` : ''}
-                                {voice.lang && voice.lang.startsWith('ru') && ' - Recommended'}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                      <div className="rounded-lg border p-4 space-y-4">
+                        <h4 className="font-medium">Voice Selection</h4>
+                        <VoiceSelect
+                          id="voice-ru"
+                          label="Russian voice (!г)"
+                          language="ru"
+                          voices={availableVoices}
+                          value={selectedVoice}
+                          onChange={setSelectedVoice}
+                        />
+                        <VoiceSelect
+                          id="voice-en"
+                          label="English voice (!r and alerts)"
+                          language="en"
+                          voices={availableVoices}
+                          value={englishVoice}
+                          onChange={setEnglishVoice}
+                        />
                       </div>
                     )}
                     
+                    <div className="rounded-lg border p-4 space-y-4">
+                      <div>
+                        <h4 className="font-medium">Viewer Limits</h4>
+                        <p className="text-sm text-muted-foreground">
+                          Keep one viewer from taking over the voice. Links are read as "link".
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="tts-max-length">Longest message read: {ttsMaxLength} characters</Label>
+                        <Slider
+                          id="tts-max-length"
+                          min={TTS_MAX_LENGTH_RANGE.min}
+                          max={TTS_MAX_LENGTH_RANGE.max}
+                          step={10}
+                          value={[ttsMaxLength]}
+                          onValueChange={([value]) => setTtsMaxLength(value)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="tts-cooldown">
+                          Cooldown per viewer: {ttsViewerCooldownSec === 0 ? 'off' : `${ttsViewerCooldownSec}s`}
+                        </Label>
+                        <Slider
+                          id="tts-cooldown"
+                          min={TTS_COOLDOWN_RANGE_SEC.min}
+                          max={TTS_COOLDOWN_RANGE_SEC.max}
+                          step={5}
+                          value={[ttsViewerCooldownSec]}
+                          onValueChange={([value]) => setTtsViewerCooldownSec(value)}
+                        />
+                      </div>
+                    </div>
+
                     {ttsProvider === 'elevenlabs' && (
                       <div className="grid place-items-center">
-                        <ApiKeyInput 
-                          onApiKeySubmit={handleApiKeySubmit} 
-                          apiKeySet={!!apiKey} 
+                        <ApiKeyInput
+                          onApiKeySubmit={handleApiKeySubmit}
+                          onApiKeyRemove={handleApiKeyRemove}
+                          apiKeySet={!!apiKey}
                         />
                       </div>
                     )}
@@ -289,16 +318,16 @@ const Index = () => {
                         <CollapsibleContent>
                           <CardContent className="space-y-3 text-sm">
                             <p>
-                              <span className="text-stream-accent font-semibold">1.</span> {ttsProvider === 'elevenlabs' ? 'Set your ElevenLabs API key above' : 'Select a voice from the dropdown above'}
+                              <span className="text-stream-accent font-semibold">1.</span> {ttsProvider === 'elevenlabs' ? 'Set your ElevenLabs API key above' : 'Pick a voice for each language above'}
                             </p>
                             <p>
                               <span className="text-stream-accent font-semibold">2.</span> Go to Connections and connect to Twitch or YouTube
                             </p>
                             <p>
-                              <span className="text-stream-accent font-semibold">3.</span> Messages starting with <code className="bg-muted px-1 rounded text-stream-accent">!г</code> will be read aloud
+                              <span className="text-stream-accent font-semibold">3.</span> Messages starting with <code className="bg-muted px-1 rounded text-stream-accent">!г</code> are read aloud in Russian, and ones starting with <code className="bg-muted px-1 rounded text-stream-accent">!r</code> in English
                             </p>
                             <p className="text-muted-foreground italic mt-4">
-                              Example: <code className="bg-muted px-1 rounded text-stream-accent">!г Привет!</code>
+                              Example: <code className="bg-muted px-1 rounded text-stream-accent">!г Привет!</code> or <code className="bg-muted px-1 rounded text-stream-accent">!r Hello!</code>
                             </p>
                           </CardContent>
                         </CollapsibleContent>
@@ -309,7 +338,8 @@ const Index = () => {
                       <Info className="h-4 w-4 text-yellow-500" />
                       <AlertTitle>Privacy</AlertTitle>
                       <AlertDescription>
-                        Your API keys and tokens are stored locally and never sent to external servers.
+                        Your logins and API key are stored in your system's keychain on this computer. They are only
+                        sent to the service they belong to (Twitch, Google or ElevenLabs).
                       </AlertDescription>
                     </Alert>
                   </div>

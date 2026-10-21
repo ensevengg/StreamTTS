@@ -1,21 +1,47 @@
-import { onAlert, type AlertData } from '@/lib/tauri-api';
+import { speakAlert } from '@/services/chatSpeech';
 
-export type { AlertData };
+export type AlertType = 'sub' | 'gift' | 'redemption' | 'superchat' | 'member';
+
+export interface AlertData {
+  platform: 'twitch' | 'youtube';
+  alert_type: AlertType;
+  user_name: string;
+  /** Spoken and shown. */
+  message: string;
+  /** Viewer-written text (Super Chat comment, redemption input); shown only. */
+  detail?: string;
+  count?: number;
+}
 
 export interface AlertSettings {
   enabled: boolean;
   twitchSubs: boolean;
   twitchGifts: boolean;
   twitchRedemptions: boolean;
-  youtubeLive: boolean;
+  youtubeSuperChats: boolean;
+  youtubeMemberships: boolean;
   volume: number;
 }
+
+export const DEFAULT_ALERT_SETTINGS: AlertSettings = {
+  enabled: true,
+  twitchSubs: true,
+  twitchGifts: true,
+  twitchRedemptions: true,
+  youtubeSuperChats: true,
+  youtubeMemberships: true,
+  volume: 0.8,
+};
+
+const SETTINGS_KEY = 'streamtts-alert-settings';
+
+type Listener = (alert: AlertData) => void;
 
 export class AlertService {
   private static instance: AlertService;
   private settings: AlertSettings;
-  private listeners: Array<(alert: AlertData) => void> = [];
-  private alertCleanup: (() => void) | null = null;
+  private readonly listeners = new Set<Listener>();
+  private readonly settingsListeners = new Set<() => void>();
 
   private constructor() {
     this.settings = this.loadSettings();
@@ -28,52 +54,17 @@ export class AlertService {
     return AlertService.instance;
   }
 
-  public initialize(): void {
-    this.alertCleanup = onAlert((alert: AlertData) => {
-      this.handleAlert(alert);
-    });
-
-    window.addEventListener('message', this.handlePostMessage);
+  /** Speaks and shows an alert, if its type is enabled. */
+  public publish(alert: AlertData): void {
+    if (!this.isEnabled(alert)) return;
+    speakAlert(alert, this.settings.volume);
+    this.listeners.forEach(listener => listener(alert));
   }
 
-  private handlePostMessage = (event: MessageEvent) => {
-    // Validate origin for security - only accept messages from trusted origins
-    const validOrigins = [
-      window.location.origin,
-      'http://localhost:3000',
-      'http://localhost:5173',
-      'http://localhost:8080'
-    ];
-    if (!validOrigins.includes(event.origin)) {
-      return;
-    }
-    
-    if (event.source !== window) return;
-    
-    const data = event.data;
-    if (data && data.platform && data.alert_type && data.user_name) {
-      this.handleAlert(data as AlertData);
-    }
-  };
-
-  private handleAlert(alert: AlertData): void {
-    if (!this.settings.enabled) {
-      return;
-    }
-
-    if (!this.isAlertTypeEnabled(alert)) {
-      return;
-    }
-
-    this.processAlert(alert);
-  }
-
-  public cleanup(): void {
-    if (this.alertCleanup) {
-      this.alertCleanup();
-      this.alertCleanup = null;
-    }
-    window.removeEventListener('message', this.handlePostMessage);
+  /** Whether the Twitch EventSub connection is worth keeping open. */
+  public wantsTwitchEvents(): boolean {
+    const s = this.settings;
+    return s.enabled && (s.twitchSubs || s.twitchGifts || s.twitchRedemptions);
   }
 
   public getSettings(): AlertSettings {
@@ -83,86 +74,62 @@ export class AlertService {
   public updateSettings(newSettings: Partial<AlertSettings>): void {
     this.settings = { ...this.settings, ...newSettings };
     this.saveSettings();
+    this.settingsListeners.forEach(listener => listener());
+  }
+
+  public onSettingsChange(listener: () => void): () => void {
+    this.settingsListeners.add(listener);
+    return () => this.settingsListeners.delete(listener);
+  }
+
+  public subscribe(listener: Listener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private isEnabled(alert: AlertData): boolean {
+    const s = this.settings;
+    if (!s.enabled) return false;
+    if (alert.platform === 'twitch') {
+      switch (alert.alert_type) {
+        case 'sub': return s.twitchSubs;
+        case 'gift': return s.twitchGifts;
+        case 'redemption': return s.twitchRedemptions;
+        default: return false;
+      }
+    }
+    switch (alert.alert_type) {
+      case 'superchat': return s.youtubeSuperChats;
+      case 'member': return s.youtubeMemberships;
+      default: return false;
+    }
   }
 
   private loadSettings(): AlertSettings {
     try {
-      const saved = localStorage.getItem('streamtts-alert-settings');
-      if (saved) {
-        return JSON.parse(saved);
+      const saved = JSON.parse(globalThis.localStorage?.getItem(SETTINGS_KEY) ?? 'null');
+      if (saved && typeof saved === 'object') {
+        // Keep only known keys, so settings from older versions (which had
+        // youtubeLive) merge cleanly over the defaults.
+        const merged = { ...DEFAULT_ALERT_SETTINGS };
+        for (const key of Object.keys(DEFAULT_ALERT_SETTINGS) as (keyof AlertSettings)[]) {
+          if (typeof saved[key] === typeof DEFAULT_ALERT_SETTINGS[key]) {
+            (merged as Record<string, unknown>)[key] = saved[key];
+          }
+        }
+        return merged;
       }
     } catch (error) {
       console.error('AlertService: Failed to load settings', error);
     }
-
-    return {
-      enabled: true,
-      twitchSubs: true,
-      twitchGifts: true,
-      twitchRedemptions: true,
-      youtubeLive: true,
-      volume: 0.8,
-    };
+    return { ...DEFAULT_ALERT_SETTINGS };
   }
 
   private saveSettings(): void {
     try {
-      localStorage.setItem('streamtts-alert-settings', JSON.stringify(this.settings));
+      globalThis.localStorage?.setItem(SETTINGS_KEY, JSON.stringify(this.settings));
     } catch (error) {
       console.error('AlertService: Failed to save settings', error);
-    }
-  }
-
-  private isAlertTypeEnabled(alert: AlertData): boolean {
-    if (alert.platform === 'twitch') {
-      switch (alert.alert_type) {
-        case 'sub':
-          return this.settings.twitchSubs;
-        case 'gift':
-          return this.settings.twitchGifts;
-        case 'redemption':
-          return this.settings.twitchRedemptions;
-        default:
-          return false;
-      }
-    } else if (alert.platform === 'youtube') {
-      switch (alert.alert_type) {
-        case 'live':
-          return this.settings.youtubeLive;
-        default:
-          return false;
-      }
-    }
-    return false;
-  }
-
-  private processAlert(alert: AlertData): void {
-    // Create a temporary audio element for TTS
-    const utterance = new SpeechSynthesisUtterance(alert.message);
-    utterance.volume = this.settings.volume;
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0;
-
-    // Try to use a different voice for alerts
-    const voices = speechSynthesis.getVoices();
-    if (voices.length > 1) {
-      utterance.voice = voices[1];
-    }
-
-    speechSynthesis.speak(utterance);
-
-    // Notify listeners
-    this.listeners.forEach(listener => listener(alert));
-  }
-
-  public addAlertListener(listener: (alert: AlertData) => void): void {
-    this.listeners.push(listener);
-  }
-
-  public removeAlertListener(listener: (alert: AlertData) => void): void {
-    const index = this.listeners.indexOf(listener);
-    if (index > -1) {
-      this.listeners.splice(index, 1);
     }
   }
 }

@@ -1,6 +1,6 @@
 # StreamTTS Privacy Policy
 
-**Last Updated:** February 2026
+**Last Updated:** October 2026
 
 ## Overview
 
@@ -9,7 +9,7 @@ StreamTTS is a free, open-source desktop application that reads chat messages fr
 ## Information We Collect
 
 ### OAuth Tokens
-When you connect your Twitch or YouTube account, StreamTTS receives and stores an OAuth access token. This token is stored **locally on your device** and is never transmitted to any external servers.
+When you connect your Twitch or YouTube account, StreamTTS receives an access token and a refresh token. They are stored **in your operating system's keychain on your device** and are only ever sent to the service they belong to (Twitch or Google), to read your chat and renew the login.
 
 ### Chat Messages
 StreamTTS reads chat messages from your connected Twitch and YouTube channels in real-time to convert them to speech. These messages are:
@@ -19,27 +19,32 @@ StreamTTS reads chat messages from your connected Twitch and YouTube channels in
 
 ## Permissions We Request
 
+All permissions are read-only. StreamTTS cannot post, moderate, upload, edit or delete anything.
+
 ### Twitch
 - `chat:read` - Read chat messages from your channel
-- `chat:edit` - Send messages to chat (for optional bot responses)
+- `channel:read:subscriptions` - See new and gifted subscriptions, for alerts
+- `channel:read:redemptions` - See channel point redemptions, for alerts
 
 ### YouTube
-- `https://www.googleapis.com/auth/youtube.readonly` - Read live chat messages
-- `https://www.googleapis.com/auth/youtube` - Access YouTube live chat functionality
+- `https://www.googleapis.com/auth/youtube.readonly` - Find your live broadcast and read its chat, Super Chats and memberships
+
+Older versions of StreamTTS asked Google for broader YouTube access. If you used one, you can remove the old grant at [Google Account Permissions](https://myaccount.google.com/permissions) and log in again.
 
 ## Data Storage
 
 All data is stored locally on your device:
-- OAuth tokens are stored in your operating system's secure credential storage
-- App settings are stored in your user profile directory
+- OAuth tokens and your ElevenLabs API key are stored in your operating system's secure credential storage
+- Alert settings are stored in your user profile directory
 - No data is uploaded to external servers
 
 ## Third-Party Services
 
 StreamTTS communicates directly with:
-- **Twitch API** - To read chat messages
+- **Twitch** - To log in, read chat messages and receive alert events
 - **YouTube Data API** - To read live chat messages
-- **Text-to-Speech Engine** - Your system's built-in TTS or configured voice service
+- **ElevenLabs** - Only if you choose it as the voice: the text of messages being read aloud is sent to ElevenLabs with your API key
+- **GitHub** - To check for app updates
 
 We do not use any analytics, tracking, or advertising services.
 
@@ -53,7 +58,7 @@ We do **NOT**:
 
 ## Account Disconnection
 
-You can disconnect your accounts at any time from the Connections tab in the app. This will revoke the OAuth tokens and remove all stored credentials.
+You can log out at any time from the Connections tab in the app. This removes the stored tokens from your device. To also revoke StreamTTS's access on the provider's side, use the links below.
 
 You can also revoke access directly from:
 - [Twitch Connections Settings](https://www.twitch.tv/settings/connections)
@@ -62,7 +67,7 @@ You can also revoke access directly from:
 ## Open Source
 
 StreamTTS is open source. You can review the complete source code at:
-https://github.com/MananJK/StreamTTS
+https://github.com/ensevengg/StreamTTS
 
 ## Changes to This Policy
 
@@ -77,6 +82,6 @@ For questions about this privacy policy, please open an issue on the GitHub repo
 ## Summary
 
 - Your data stays on your device
-- We only request permissions needed to read chat
-- No analytics, no tracking, no external servers
+- We only request read-only permissions
+- No analytics, no tracking, no servers of our own
 - Open source and auditable

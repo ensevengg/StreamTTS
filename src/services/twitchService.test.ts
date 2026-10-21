@@ -1,116 +1,131 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { commandHandlers, desktopTauriApi, fakeInvoke, keychain, resetDesktop } from '@/test/desktopMock';
 
-const localStorageMock = (() => {
-  let store: Record<string, string> = {};
-  return {
-    getItem: vi.fn((key: string) => store[key] ?? null),
-    setItem: vi.fn((key: string, value: string) => { store[key] = value; }),
-    removeItem: vi.fn((key: string) => { delete store[key]; }),
-    clear: vi.fn(() => { store = {}; }),
-  };
-})();
-Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock });
+vi.mock('@/lib/tauri-api', () => desktopTauriApi());
 
 import {
-  saveTwitchOAuthToken,
-  getTwitchOAuthToken,
-  hasTwitchOAuthToken,
+  checkTwitchSession,
   clearTwitchOAuthToken,
-  isTwitchTokenStale,
-  getTokenAgeMinutes,
-  refreshTwitchToken,
+  getValidTwitchToken,
+  hasTwitchOAuthToken,
+  saveTwitchTokens,
 } from './twitchService';
 
-// Outside Tauri the service stores under this key in localStorage.
-const TOKEN_KEY = 'twitch_oauth_token';
+const KEY = 'twitch_oauth_token';
+const stored = () => JSON.parse(keychain.get(KEY) ?? 'null');
 
-describe('twitchService token management', () => {
+/** Stores a token that is about to expire, so the next read refreshes it. */
+const storeExpiring = (msLeft = 60_000) =>
+  keychain.set(KEY, JSON.stringify({ token: 'old', refresh_token: 'r1', expires_at: Date.now() + msLeft, timestamp: 0 }));
+
+const validateResponse = (status: number) =>
+  new Response(
+    status === 200 ? JSON.stringify({ login: 'streamer', user_id: '42', client_id: 'cid', scopes: ['chat:read'] }) : '{}',
+    { status },
+  );
+
+describe('twitchService', () => {
   beforeEach(() => {
-    localStorageMock.clear();
-    vi.clearAllMocks();
+    resetDesktop();
+    vi.unstubAllGlobals();
   });
 
-  it('round-trips a token', async () => {
-    await saveTwitchOAuthToken('abc123');
-    expect(await getTwitchOAuthToken()).toBe('abc123');
+  it('stores tokens in the keychain with their expiry', async () => {
+    await saveTwitchTokens('access', 'refresh', 14_400);
+    expect(stored()).toMatchObject({ token: 'access', refresh_token: 'refresh' });
+    expect(stored().expires_at).toBeGreaterThan(Date.now());
     expect(await hasTwitchOAuthToken()).toBe(true);
   });
 
-  it('stores refresh token and expiry when provided', async () => {
-    await saveTwitchOAuthToken('abc123', 'def456', 3600);
-    const raw = JSON.parse(localStorageMock.getItem(TOKEN_KEY) ?? '{}');
-    expect(raw.token).toBe('abc123');
-    expect(raw.refresh_token).toBe('def456');
-    expect(raw.expires_at).toBeGreaterThan(Date.now());
+  it('returns a fresh token without refreshing', async () => {
+    await saveTwitchTokens('access', 'refresh', 14_400);
+    expect(await getValidTwitchToken()).toEqual({ status: 'ok', token: 'access' });
+    expect(fakeInvoke).not.toHaveBeenCalledWith('twitch_refresh_token', expect.anything());
   });
 
-  it('clears a token', async () => {
-    await saveTwitchOAuthToken('abc123');
+  it('refreshes once for concurrent callers and keeps the rotated refresh token', async () => {
+    storeExpiring();
+    const refresh = vi.fn(async () => ({ access_token: 'new', refresh_token: 'r2', expires_in: 14_400 }));
+    commandHandlers.set('twitch_refresh_token', refresh);
+
+    const results = await Promise.all([getValidTwitchToken(), getValidTwitchToken(), getValidTwitchToken()]);
+    expect(results.every(r => r.status === 'ok' && r.token === 'new')).toBe(true);
+    // Twitch refresh tokens are single-use: a second request would fail.
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(stored().refresh_token).toBe('r2');
+  });
+
+  it('signs out when Twitch rejects the refresh token', async () => {
+    storeExpiring();
+    commandHandlers.set('twitch_refresh_token', () => {
+      throw { kind: 'invalid_grant', message: 'Invalid refresh token' };
+    });
+    expect(await getValidTwitchToken()).toEqual({ status: 'signed_out' });
+    expect(keychain.has(KEY)).toBe(false);
+  });
+
+  it('keeps using the current token while a refresh fails for network reasons', async () => {
+    storeExpiring(60_000);
+    commandHandlers.set('twitch_refresh_token', () => {
+      throw { kind: 'network', message: 'offline' };
+    });
+    expect(await getValidTwitchToken()).toEqual({ status: 'ok', token: 'old' });
+    expect(keychain.has(KEY)).toBe(true);
+  });
+
+  it('reports "unavailable" (not signed out) once that token has expired', async () => {
+    storeExpiring(-1);
+    commandHandlers.set('twitch_refresh_token', () => {
+      throw { kind: 'network', message: 'offline' };
+    });
+    expect((await getValidTwitchToken()).status).toBe('unavailable');
+    expect(keychain.has(KEY)).toBe(true);
+  });
+
+  it('a refresh that finishes after logout does not sign the user back in', async () => {
+    storeExpiring();
+    let finishRefresh: (value: unknown) => void = () => {};
+    commandHandlers.set('twitch_refresh_token', () => new Promise(resolve => { finishRefresh = resolve; }));
+
+    const pending = getValidTwitchToken();
+    await new Promise(resolve => setTimeout(resolve, 0));
     await clearTwitchOAuthToken();
-    expect(await getTwitchOAuthToken()).toBeNull();
-    expect(await hasTwitchOAuthToken()).toBe(false);
+    finishRefresh({ access_token: 'new', refresh_token: 'r2', expires_in: 14_400 });
+
+    expect(await pending).toEqual({ status: 'signed_out' });
+    expect(keychain.has(KEY)).toBe(false);
   });
 
-  it('returns null when no token stored', async () => {
-    expect(await getTwitchOAuthToken()).toBeNull();
-    expect(await hasTwitchOAuthToken()).toBe(false);
-  });
+  describe('checkTwitchSession', () => {
+    it('refreshes a rejected token and returns the identity', async () => {
+      await saveTwitchTokens('revoked', 'r1', 14_400);
+      commandHandlers.set('twitch_refresh_token', async () => ({ access_token: 'new', refresh_token: 'r2', expires_in: 14_400 }));
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(validateResponse(401))
+        .mockResolvedValueOnce(validateResponse(200));
+      vi.stubGlobal('fetch', fetchMock);
 
-  it('isTwitchTokenStale returns true when no token', async () => {
-    expect(await isTwitchTokenStale()).toBe(true);
-  });
+      const result = await checkTwitchSession();
+      expect(result).toEqual({
+        status: 'valid',
+        identity: { login: 'streamer', userId: '42', clientId: 'cid', scopes: ['chat:read'] },
+      });
+      expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe('OAuth new');
+    });
 
-  it('isTwitchTokenStale returns false for token without known expiry', async () => {
-    await saveTwitchOAuthToken('fresh-token');
-    expect(await isTwitchTokenStale()).toBe(false);
-  });
+    it('does not sign out when Twitch is unreachable', async () => {
+      await saveTwitchTokens('access', 'r1', 14_400);
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+      expect(await checkTwitchSession()).toEqual({ status: 'unreachable' });
+      expect(keychain.has(KEY)).toBe(true);
+    });
 
-  it('isTwitchTokenStale returns true when token expires within the buffer', async () => {
-    const expiring = {
-      token: 'soon',
-      timestamp: Date.now(),
-      expires_at: Date.now() + 5 * 60 * 1000,
-    };
-    localStorageMock.setItem(TOKEN_KEY, JSON.stringify(expiring));
-    expect(await isTwitchTokenStale()).toBe(true);
-  });
-
-  it('isTwitchTokenStale returns false for token with distant expiry', async () => {
-    const valid = {
-      token: 'long-lived',
-      timestamp: Date.now(),
-      expires_at: Date.now() + 3600 * 1000,
-    };
-    localStorageMock.setItem(TOKEN_KEY, JSON.stringify(valid));
-    expect(await isTwitchTokenStale()).toBe(false);
-  });
-
-  it('getTokenAgeMinutes returns null when no token', async () => {
-    expect(await getTokenAgeMinutes()).toBeNull();
-  });
-
-  it('getTokenAgeMinutes returns a number for fresh token', async () => {
-    await saveTwitchOAuthToken('token');
-    const age = await getTokenAgeMinutes();
-    expect(age).toBeTypeOf('number');
-    expect(age).toBeGreaterThanOrEqual(0);
-  });
-
-  it('handles legacy string-only token format', async () => {
-    localStorageMock.setItem(TOKEN_KEY, JSON.stringify('legacy-token'));
-    expect(await getTwitchOAuthToken()).toBe('legacy-token');
-    expect(await hasTwitchOAuthToken()).toBe(true);
-  });
-
-  it('survives corrupted storage gracefully', async () => {
-    localStorageMock.setItem(TOKEN_KEY, '{bad json');
-    expect(await getTwitchOAuthToken()).toBeNull();
-    expect(await hasTwitchOAuthToken()).toBe(false);
-  });
-
-  it('refreshTwitchToken returns null without a refresh token', async () => {
-    await saveTwitchOAuthToken('abc123');
-    expect(await refreshTwitchToken()).toBeNull();
-    expect(await hasTwitchOAuthToken()).toBe(true);
+    it('signs out when even a refreshed token is rejected', async () => {
+      await saveTwitchTokens('revoked', 'r1', 14_400);
+      commandHandlers.set('twitch_refresh_token', async () => ({ access_token: 'also-bad', refresh_token: 'r2', expires_in: 14_400 }));
+      vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => validateResponse(401)));
+      expect(await checkTwitchSession()).toEqual({ status: 'signed_out' });
+      expect(keychain.has(KEY)).toBe(false);
+    });
   });
 });

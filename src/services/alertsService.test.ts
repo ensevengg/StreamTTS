@@ -1,107 +1,59 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const localStorageMock = (() => {
-  let store: Record<string, string> = {};
-  return {
-    getItem: vi.fn((key: string) => store[key] ?? null),
-    setItem: vi.fn((key: string, value: string) => { store[key] = value; }),
-    removeItem: vi.fn((key: string) => { delete store[key]; }),
-    clear: vi.fn(() => { store = {}; }),
-  };
-})();
-Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock });
+vi.mock('@/services/chatSpeech', () => ({ speakAlert: vi.fn() }));
 
-Object.defineProperty(globalThis, 'window', {
-  value: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
-});
+import { speakAlert } from '@/services/chatSpeech';
+import { AlertService, DEFAULT_ALERT_SETTINGS, type AlertData } from './alertsService';
 
-if (typeof globalThis.speechSynthesis === 'undefined') {
-  Object.defineProperty(globalThis, 'speechSynthesis', {
-    value: { getVoices: vi.fn(() => []), speak: vi.fn() },
-    writable: true,
-  });
-}
-
-import { AlertService } from './alertsService';
-
-const DEFAULTS = {
-  enabled: true, twitchSubs: true, twitchGifts: true,
-  twitchRedemptions: true, youtubeLive: true, volume: 0.8,
-};
+const twitchSub: AlertData = { platform: 'twitch', alert_type: 'sub', user_name: 'A', message: 'A just subscribed!' };
+const superChat: AlertData = { platform: 'youtube', alert_type: 'superchat', user_name: 'B', message: 'B sent a Super Chat!' };
 
 describe('AlertService', () => {
   beforeEach(() => {
-    localStorageMock.clear();
-    vi.clearAllMocks();
-    AlertService.getInstance().updateSettings(DEFAULTS);
+    vi.mocked(speakAlert).mockClear();
+    AlertService.getInstance().updateSettings(DEFAULT_ALERT_SETTINGS);
   });
 
-  describe('singleton', () => {
-    it('getInstance returns the same instance', () => {
-      expect(AlertService.getInstance()).toBe(AlertService.getInstance());
-    });
+  it('speaks and shows enabled alerts at the alert volume', () => {
+    const service = AlertService.getInstance();
+    const shown = vi.fn();
+    const unsubscribe = service.subscribe(shown);
+    service.updateSettings({ volume: 0.4 });
+
+    service.publish(twitchSub);
+    expect(speakAlert).toHaveBeenCalledWith(twitchSub, 0.4);
+    expect(shown).toHaveBeenCalledWith(twitchSub);
+    unsubscribe();
   });
 
-  describe('settings defaults', () => {
-    it('returns default settings when nothing stored', () => {
-      const s = AlertService.getInstance().getSettings();
-      expect(s.enabled).toBe(true);
-      expect(s.volume).toBe(0.8);
-      expect(s.twitchSubs).toBe(true);
-    });
+  it('drops alerts whose type is turned off', () => {
+    const service = AlertService.getInstance();
+    service.updateSettings({ youtubeSuperChats: false });
+    service.publish(superChat);
+    service.updateSettings({ youtubeSuperChats: true, enabled: false });
+    service.publish(superChat);
+    expect(speakAlert).not.toHaveBeenCalled();
   });
 
-  describe('settings save/load roundtrip', () => {
-    it('persists settings changes across re-initialization', () => {
-      AlertService.getInstance().updateSettings({ enabled: false, volume: 0.5 });
-      const s = AlertService.getInstance().getSettings();
-      expect(s.enabled).toBe(false);
-      expect(s.volume).toBe(0.5);
-    });
-
-    it('merges partial updates', () => {
-      AlertService.getInstance().updateSettings({ volume: 0.3 });
-      const s = AlertService.getInstance().getSettings();
-      expect(s.volume).toBe(0.3);
-      expect(s.enabled).toBe(true);
-    });
+  it('keeps the EventSub connection only while a Twitch alert is wanted', () => {
+    const service = AlertService.getInstance();
+    expect(service.wantsTwitchEvents()).toBe(true);
+    service.updateSettings({ twitchSubs: false, twitchGifts: false, twitchRedemptions: false });
+    expect(service.wantsTwitchEvents()).toBe(false);
   });
 
-  describe('alert filtering', () => {
-    it('getSettings reflects disabled state', () => {
-      AlertService.getInstance().updateSettings({ enabled: false });
-      expect(AlertService.getInstance().getSettings().enabled).toBe(false);
-    });
-
-    it('getSettings reflects alert type toggles', () => {
-      AlertService.getInstance().updateSettings({ twitchSubs: false, twitchGifts: true, youtubeLive: false });
-      const s = AlertService.getInstance().getSettings();
-      expect(s.twitchSubs).toBe(false);
-      expect(s.twitchGifts).toBe(true);
-      expect(s.youtubeLive).toBe(false);
-    });
+  it('notifies settings listeners', () => {
+    const service = AlertService.getInstance();
+    const listener = vi.fn();
+    const off = service.onSettingsChange(listener);
+    service.updateSettings({ volume: 0.5 });
+    off();
+    service.updateSettings({ volume: 0.6 });
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 
-  describe('listener management', () => {
-    it('addAlertListener and removeListener do not throw', () => {
-      const svc = AlertService.getInstance();
-      const fn = vi.fn();
-      svc.addAlertListener(fn);
-      svc.removeAlertListener(fn);
-      svc.removeAlertListener(vi.fn());
-    });
-  });
-
-  describe('cleanup safety', () => {
-    it('cleanup before initialize does not throw', () => {
-      const svc = AlertService.getInstance();
-      svc.cleanup();
-    });
-
-    it('cleanup can be called multiple times', () => {
-      const svc = AlertService.getInstance();
-      svc.cleanup();
-      svc.cleanup();
-    });
+  it('persists settings', () => {
+    AlertService.getInstance().updateSettings({ twitchGifts: false });
+    expect(JSON.parse(localStorage.getItem('streamtts-alert-settings')!).twitchGifts).toBe(false);
   });
 });

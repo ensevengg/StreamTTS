@@ -4,7 +4,6 @@
   "version": "2.0.0",
   "description": "Free TTS application for streaming chat messages in your stream",
   "author": "Nerve",
-  "main": "index.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -29,8 +28,6 @@
     "@radix-ui/react-switch": "^1.1.0",
     "@radix-ui/react-tabs": "^1.1.0",
     "@radix-ui/react-toast": "^1.2.1",
-    "@radix-ui/react-tooltip": "^1.1.4",
-    "@tanstack/react-query": "^5.56.2",
     "@tauri-apps/api": "^2.9.1",
     "@tauri-apps/plugin-shell": "^2.3.4",
     "@tauri-apps/plugin-updater": "^2.10.1",
@@ -40,7 +37,6 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2",
-    "sonner": "^1.5.0",
     "tailwind-merge": "^2.5.2",
     "tailwindcss-animate": "^1.0.7",
     "tmi.js": "^1.8.5",
@@ -49,6 +45,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.9.0",
+    "@tauri-apps/cli": "^2.12.3",
     "@types/node": "^22.5.5",
     "@types/react": "^18.3.20",
     "@types/react-dom": "^18.3.7",
@@ -61,10 +58,9 @@
     "postcss": "^8.4.47",
     "rimraf": "^6.0.1",
     "tailwindcss": "^3.4.11",
-    "terser": "^5.51.2",
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.0.1",
-    "vite": "^5.4.1",
+    "vite": "^5.4.21",
     "vitest": "^4.1.8"
   }
 }

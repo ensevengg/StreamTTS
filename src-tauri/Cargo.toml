@@ -28,11 +28,17 @@ reqwest = { version = "0.12", features = ["json"] }
 tauri-plugin-shell = "2.3.4"
 tauri-plugin-single-instance = "2.3.7"
 tauri-plugin-updater = "2"
-hmac = "0.12"
-sha1 = "0.10"
+base64 = "0.22"
 sha2 = "0.10"
-chrono = { version = "0.4", features = ["serde"] }
-dotenv = "0.15"
 hex = "0.4"
 rand = "0.8"
 keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
+# gRPC client for YouTube's streaming live chat (liveChatMessages.streamList).
+# "transport" also provides the server half, used by the stream tests.
+tonic = { version = "0.12", default-features = false, features = ["transport", "tls-native-roots", "prost"] }
+prost = "0.13"
+
+[dev-dependencies]
+tokio-stream = { version = "0.1", features = ["net"] }
+tower-service = "0.3"
+http-body = "1"

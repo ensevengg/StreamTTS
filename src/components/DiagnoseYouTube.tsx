@@ -1,121 +1,65 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
-import { getValidYoutubeToken } from '@/services/youtubeService';
+import { errorMessage } from '@/lib/http';
+import {
+  fetchActiveBroadcasts,
+  fetchOwnChannelTitle,
+  getValidYoutubeToken,
+  YouTubeApiError,
+} from '@/services/youtubeService';
 
+const describe = (error: unknown): string => {
+  if (error instanceof YouTubeApiError) {
+    if (error.status === 401) return 'Your session expired. Log in again.';
+    if (error.reason === 'quotaExceeded') return "YouTube's daily API quota is used up. Try again tomorrow.";
+    if (error.reason === 'liveStreamingNotEnabled') return 'Live streaming is not enabled on this channel. Enable it in YouTube Studio.';
+    return `${error.status}: ${error.message}`;
+  }
+  return `Could not reach YouTube: ${errorMessage(error)}`;
+};
 
-interface DiagnoseYouTubeProps {
-  onDiagnosticsComplete?: () => void;
-}
-
-const DiagnoseYouTube: React.FC<DiagnoseYouTubeProps> = ({ onDiagnosticsComplete }) => {
+/** Checks login, channel access and live broadcasts in one click. */
+const DiagnoseYouTube: React.FC = () => {
   const { toast } = useToast();
+  const [running, setRunning] = useState(false);
 
-  const diagnoseYouTubeIssues = useCallback(async () => {
-    const token = await getValidYoutubeToken();
-    if (!token) {
-      toast({
-        title: "Not Logged In",
-        description: "Please log in to YouTube first.",
-        variant: "destructive",
-        duration: 5000
-      });
-      return;
-    }
-
+  const diagnose = useCallback(async () => {
+    setRunning(true);
     try {
-      const channelResponse = await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-
-      if (channelResponse.ok) {
-        const channelData = await channelResponse.json();
+      const token = await getValidYoutubeToken();
+      if (token.status !== 'ok') {
         toast({
-          title: "✅ Connected",
-          description: `Connected to channel: ${channelData.items?.[0]?.snippet?.title || 'Unknown'}`,
-          duration: 5000
+          title: 'Not logged in',
+          description: token.status === 'signed_out' ? 'Log in to YouTube first.' : token.reason,
+          variant: 'destructive',
         });
-      } else {
-        if (channelResponse.status === 403) {
-          toast({
-            title: "❌ Permission Denied",
-            description: "Enable live streaming in YouTube Studio and log in again.",
-            variant: "destructive",
-            duration: 5000
-          });
-        } else if (channelResponse.status === 401) {
-          toast({
-            title: "❌ Session Expired",
-            description: "Please log in again.",
-            variant: "destructive",
-            duration: 5000
-          });
-        } else if (channelResponse.status === 429) {
-          toast({
-            title: "❌ Limit Reached",
-            description: "Too many requests. Wait a moment and try again.",
-            variant: "destructive",
-            duration: 5000
-          });
-        }
         return;
       }
-
-
-      const broadcastResponse = await fetch('https://www.googleapis.com/youtube/v3/liveBroadcasts?part=snippet&broadcastStatus=active', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-
-      if (broadcastResponse.ok) {
-        const broadcastData = await broadcastResponse.json();
-        if (broadcastData.items?.length === 0) {
-          toast({
-            title: "ℹ️ No Active Streams",
-            description: "Start a live stream on YouTube to test chat connection.",
-            duration: 6000
-          });
-        } else {
-          toast({
-            title: "✅ Active Broadcasts Found",
-
-            description: `Found ${broadcastData.items.length} active broadcast(s). Ready to connect!`,
-          });
-        }
-      } else {
-        toast({
-          title: "❌ Broadcast Access Failed",
-          description: `HTTP ${broadcastResponse.status}: Cannot access live broadcasts. Check permissions.`,
-
-          variant: "destructive",
-          duration: 8000
-        });
-      }
-
+      const channel = await fetchOwnChannelTitle(token.token);
+      const broadcasts = await fetchActiveBroadcasts(token.token);
+      const withChat = broadcasts.filter(b => b.snippet?.liveChatId).length;
       toast({
-        title: "YouTube Diagnostic Complete",
-        description: "Check the browser console (F12) for detailed results.",
-        duration: 5000
+        title: `Channel: ${channel ?? 'unknown'}`,
+        description: broadcasts.length === 0
+          ? 'No live broadcast right now. Connecting will wait until you go live.'
+          : `${broadcasts.length} live broadcast(s), ${withChat} with chat. Ready to connect.`,
       });
-
-      onDiagnosticsComplete?.();
     } catch (error) {
-      console.error("Diagnostic error:", error);
-      toast({
-        title: "Diagnostic Error",
-        description: `Failed to run diagnostics: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        variant: "destructive",
-        duration: 8000
-      });
+      toast({ title: 'YouTube check failed', description: describe(error), variant: 'destructive' });
+    } finally {
+      setRunning(false);
     }
-  }, [toast, onDiagnosticsComplete]);
+  }, [toast]);
 
   return (
     <Button
-      onClick={diagnoseYouTubeIssues}
+      onClick={diagnose}
+      disabled={running}
       variant="outline"
       className="border-yellow-500/50 text-yellow-400 hover:bg-yellow-500/20"
     >
-      🔍 Diagnose
+      {running ? 'Checking…' : 'Check setup'}
     </Button>
   );
 };

@@ -8,16 +8,9 @@ const makeMsg = (id: string): Message => ({
   content: 'hello',
   timestamp: Date.now(),
   username: 'user',
-  status: 'pending',
 });
 
-const makeConn = (id: string): ChatConnection => ({
-  id,
-  type: 'twitch',
-  channelName: 'streamer',
-  isConnected: false,
-  status: 'idle',
-});
+const twitch: ChatConnection = { id: 'twitch', type: 'twitch', channelName: 'streamer', status: 'connecting' };
 
 describe('chatStore', () => {
   beforeEach(() => {
@@ -30,112 +23,58 @@ describe('chatStore', () => {
   });
 
   describe('messages', () => {
-    it('adds a message', () => {
-      useChatStore.getState().addMessage(makeMsg('1'));
-      expect(useChatStore.getState().messages).toHaveLength(1);
-    });
-
-    it('caps messages at MAX_MESSAGES (500)', () => {
-      const store = useChatStore.getState();
-      for (let i = 0; i < 505; i++) {
-        store.addMessage(makeMsg(`msg-${i}`));
-      }
-      expect(useChatStore.getState().messages).toHaveLength(500);
-    });
-
-    it('keeps the most recent messages when capped', () => {
+    it('keeps the most recent 500 messages', () => {
       const store = useChatStore.getState();
       for (let i = 0; i < 510; i++) {
         store.addMessage(makeMsg(`msg-${i}`));
       }
       const ids = useChatStore.getState().messages.map(m => m.id);
+      expect(ids).toHaveLength(500);
       expect(ids[0]).toBe('msg-10');
       expect(ids[ids.length - 1]).toBe('msg-509');
     });
 
-    it('updates message status', () => {
+    it('updates a message status with its reason', () => {
       useChatStore.getState().addMessage(makeMsg('1'));
-      useChatStore.getState().updateMessageStatus('1', 'playing');
-      expect(useChatStore.getState().messages[0].status).toBe('playing');
+      useChatStore.getState().updateMessageStatus('1', 'skipped', 'Viewer cooldown');
+      expect(useChatStore.getState().messages[0]).toMatchObject({ status: 'skipped', statusDetail: 'Viewer cooldown' });
     });
 
-    it('updateMessageStatus does nothing for unknown id', () => {
+    it('leaves state untouched for an unknown id', () => {
       useChatStore.getState().addMessage(makeMsg('1'));
+      const before = useChatStore.getState().messages;
       useChatStore.getState().updateMessageStatus('nonexistent', 'completed');
-      expect(useChatStore.getState().messages).toHaveLength(1);
-    });
-
-    it('setMessages replaces all messages', () => {
-      useChatStore.getState().addMessage(makeMsg('1'));
-      useChatStore.getState().setMessages([makeMsg('2'), makeMsg('3')]);
-      expect(useChatStore.getState().messages).toHaveLength(2);
+      expect(useChatStore.getState().messages).toBe(before);
     });
   });
 
   describe('connections', () => {
-    it('adds a connection', () => {
-      useChatStore.getState().addConnection(makeConn('twitch-1'));
-      expect(useChatStore.getState().connections).toHaveLength(1);
+    it('keeps one connection per platform', () => {
+      const store = useChatStore.getState();
+      store.upsertConnection(twitch);
+      store.upsertConnection({ ...twitch, channelName: 'other' });
+      expect(useChatStore.getState().connections).toEqual([{ ...twitch, channelName: 'other' }]);
+    });
+
+    it('patches status and detail', () => {
+      const store = useChatStore.getState();
+      store.upsertConnection(twitch);
+      store.updateConnection('twitch', { status: 'reconnecting', detail: 'Ping timeout' });
+      expect(useChatStore.getState().connections[0]).toMatchObject({ status: 'reconnecting', detail: 'Ping timeout' });
     });
 
     it('removes a connection', () => {
-      useChatStore.getState().addConnection(makeConn('twitch-1'));
-      useChatStore.getState().removeConnection('twitch-1');
-      expect(useChatStore.getState().connections).toHaveLength(0);
-    });
-
-    it('removeConnection handles nonexistent id gracefully', () => {
-      useChatStore.getState().addConnection(makeConn('twitch-1'));
-      useChatStore.getState().removeConnection('nonexistent');
-      expect(useChatStore.getState().connections).toHaveLength(1);
-    });
-
-    it('updates connection status', () => {
-      useChatStore.getState().addConnection(makeConn('twitch-1'));
-      useChatStore.getState().updateConnectionStatus('twitch-1', true);
-      expect(useChatStore.getState().connections[0].isConnected).toBe(true);
-      expect(useChatStore.getState().connections[0].error).toBeUndefined();
-    });
-
-    it('updateConnectionStatus sets error', () => {
-      useChatStore.getState().addConnection(makeConn('twitch-1'));
-      useChatStore.getState().updateConnectionStatus('twitch-1', false, 'Network down');
-      expect(useChatStore.getState().connections[0].isConnected).toBe(false);
-      expect(useChatStore.getState().connections[0].error).toBe('Network down');
-    });
-
-    it('setConnections replaces all connections', () => {
-      useChatStore.getState().addConnection(makeConn('twitch-1'));
-      useChatStore.getState().setConnections([{ ...makeConn('yt-1'), type: 'youtube' }]);
-      expect(useChatStore.getState().connections).toHaveLength(1);
-      expect(useChatStore.getState().connections[0].type).toBe('youtube');
-    });
-
-    it('tracks multiple platforms independently', () => {
       const store = useChatStore.getState();
-      store.addConnection({ ...makeConn('twitch-1'), type: 'twitch' });
-      store.addConnection({ ...makeConn('youtube-1'), type: 'youtube' });
-      store.updateConnectionStatus('twitch-1', true);
-      store.updateConnectionStatus('youtube-1', true);
-      expect(useChatStore.getState().connections.filter(c => c.isConnected)).toHaveLength(2);
+      store.upsertConnection(twitch);
+      store.upsertConnection({ id: 'youtube', type: 'youtube', channelName: 'yt', status: 'waiting' });
+      store.removeConnection('twitch');
+      expect(useChatStore.getState().connections.map(c => c.id)).toEqual(['youtube']);
     });
   });
 
-  describe('activeTab and isProcessing', () => {
-    it('defaults to chat tab', () => {
-      expect(useChatStore.getState().activeTab).toBe('chat');
-    });
-
-    it('setActiveTab changes tab', () => {
-      useChatStore.getState().setActiveTab('settings');
-      expect(useChatStore.getState().activeTab).toBe('settings');
-    });
-
-    it('setIsProcessing toggles processing', () => {
-      useChatStore.getState().setIsProcessing(true);
-      expect(useChatStore.getState().isProcessing).toBe(true);
-      useChatStore.getState().setIsProcessing(false);
-      expect(useChatStore.getState().isProcessing).toBe(false);
-    });
+  it('tracks the active tab and speech state', () => {
+    useChatStore.getState().setActiveTab('settings');
+    useChatStore.getState().setIsProcessing(true);
+    expect(useChatStore.getState()).toMatchObject({ activeTab: 'settings', isProcessing: true });
   });
 });

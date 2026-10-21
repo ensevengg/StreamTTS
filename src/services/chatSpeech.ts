@@ -1,0 +1,72 @@
+import { toast } from '@/hooks/use-toast';
+import { useChatStore } from '@/stores/chatStore';
+import { useSettingsStore } from '@/stores/settingsStore';
+import { ttsQueueService } from '@/services/ttsQueueService';
+import { CooldownTracker, parseTtsCommand, prepareSpeechText } from '@/services/ttsFilter';
+import type { AlertData } from '@/services/alertsService';
+import type { Message } from '@/types/message';
+
+const cooldowns = new CooldownTracker();
+const ERROR_TOAST_INTERVAL_MS = 30_000;
+let lastErrorToast = 0;
+
+/** One toast per burst of failures, e.g. an invalid ElevenLabs key. */
+const reportSpeechError = (detail?: string): void => {
+  const now = Date.now();
+  if (now - lastErrorToast < ERROR_TOAST_INTERVAL_MS) return;
+  lastErrorToast = now;
+  toast({ title: "Couldn't read a message aloud", description: detail, variant: 'destructive' });
+};
+
+/**
+ * Speaks a message that starts with a read-aloud command (`!г`, `!r`) in that
+ * command's language, and ignores any other message. Viewer messages are
+ * subject to the per-viewer cooldown and queue cap; the streamer's are not.
+ */
+export function speakChatMessage(message: Message, { fromViewer }: { fromViewer: boolean }): void {
+  const command = parseTtsCommand(message.content);
+  if (!command) return;
+  const { ttsMaxLength, ttsViewerCooldownSec } = useSettingsStore.getState();
+  const { updateMessageStatus } = useChatStore.getState();
+
+  const text = prepareSpeechText(command.text, ttsMaxLength);
+  if (!text) {
+    updateMessageStatus(message.id, 'skipped', 'Nothing to read');
+    return;
+  }
+  const viewer = (message.username || 'anonymous').toLowerCase();
+  if (fromViewer && !cooldowns.allow(viewer, ttsViewerCooldownSec * 1000)) {
+    updateMessageStatus(message.id, 'skipped', 'Viewer cooldown');
+    return;
+  }
+
+  updateMessageStatus(message.id, 'queued');
+  const accepted = ttsQueueService.enqueue({
+    id: message.id,
+    text,
+    language: command.language,
+    owner: fromViewer ? viewer : undefined,
+    onStatus: (status, detail) => {
+      useChatStore.getState().updateMessageStatus(message.id, status, detail);
+      if (status === 'error') reportSpeechError(detail);
+    },
+  });
+  if (!accepted) updateMessageStatus(message.id, 'skipped', 'Too many messages from this viewer');
+}
+
+/** Alerts go ahead of waiting chat messages, at the alert volume. */
+export function speakAlert(alert: AlertData, volume: number): void {
+  const text = prepareSpeechText(alert.message, 300);
+  if (!text) return;
+  ttsQueueService.enqueue({
+    id: `alert-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    text,
+    // Alert texts are written in English (see eventToAlert, chatItemToAlert).
+    language: 'en',
+    priority: true,
+    volume,
+    onStatus: (status, detail) => {
+      if (status === 'error') reportSpeechError(detail);
+    },
+  });
+}

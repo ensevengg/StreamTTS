@@ -3,15 +3,58 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Card } from '@/components/ui/card';
 import { Volume2, User } from 'lucide-react';
 import { Message } from '@/types/message';
-import { TTS_COMMAND_PREFIX } from '@/config/security';
-
-interface MessageHistoryProps {
-  messages: Message[];
-}
+import { stripCommandPrefix } from '@/services/ttsFilter';
+import { useChatStore } from '@/stores/chatStore';
 
 const MAX_VISIBLE_MESSAGES = 100;
 
-const MessageHistory: React.FC<MessageHistoryProps> = ({ messages }) => {
+const STATUS_NOTES: Partial<Record<NonNullable<Message['status']>, string>> = {
+  queued: 'Queued',
+  skipped: 'Not read',
+  error: 'Failed',
+};
+
+interface MessageRowProps {
+  message: Message;
+}
+
+// Memoized so an incoming message renders only the new row, and a status
+// change (queued -> playing -> completed) re-renders only its own row.
+const MessageRow = React.memo<MessageRowProps>(({ message }) => {
+  const note = message.status ? STATUS_NOTES[message.status] : undefined;
+  return (
+    <div
+      className={`p-3 rounded-lg ${
+        message.status === 'playing'
+          ? 'bg-stream-accent/20 border border-stream-accent animate-pulse-glow'
+          : 'bg-muted/30'
+      }`}
+    >
+      <div className="flex items-center gap-2 mb-1">
+        <User size={16} className="text-stream-accent" />
+        <span className="text-sm font-semibold text-stream-accent">
+          {message.username || 'Viewer'}
+        </span>
+        {note && (
+          <span className="text-xs text-muted-foreground" title={message.statusDetail}>
+            · {note}{message.statusDetail ? ` (${message.statusDetail})` : ''}
+          </span>
+        )}
+        <span className="text-xs text-muted-foreground ml-auto">
+          {new Date(message.timestamp).toLocaleTimeString()}
+        </span>
+      </div>
+      <p className="text-sm ml-6 break-words">{stripCommandPrefix(message.content)}</p>
+    </div>
+  );
+});
+MessageRow.displayName = 'MessageRow';
+
+// Subscribes to the chat store directly so incoming messages never re-render
+// anything above this component (Index, tabs, input, volume control).
+const MessageHistory: React.FC = () => {
+  const messages = useChatStore(s => s.messages);
+
   const visibleMessages = useMemo(() => {
     return messages.slice(-MAX_VISIBLE_MESSAGES);
   }, [messages]);
@@ -22,31 +65,13 @@ const MessageHistory: React.FC<MessageHistoryProps> = ({ messages }) => {
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
             <Volume2 size={40} className="mb-2 text-stream-accent/50" />
-                            <p>No messages yet. Send a Russian message to get started!</p>
-                            <p className="mt-2 text-sm">Example: {TTS_COMMAND_PREFIX} Привет, как дела?</p>
+            <p>No messages yet. Send a message to get started!</p>
+            <p className="mt-2 text-sm">Example: !г Привет, как дела? or !r Hello, how are you?</p>
           </div>
         ) : (
           <div className="space-y-4">
             {visibleMessages.map((message) => (
-              <div 
-                key={message.id}
-                className={`p-3 rounded-lg ${
-                  message.status === 'playing' 
-                    ? 'bg-stream-accent/20 border border-stream-accent animate-pulse-glow' 
-                    : 'bg-muted/30'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-1">
-                  <User size={16} className="text-stream-accent" />
-                  <span className="text-sm font-semibold text-stream-accent">
-                    {message.username || 'Viewer'}
-                  </span>
-                  <span className="text-xs text-muted-foreground ml-auto">
-                    {new Date(message.timestamp).toLocaleTimeString()}
-                  </span>
-                </div>
-                <p className="text-sm ml-6">{message.content.replace(new RegExp(`^${TTS_COMMAND_PREFIX}\\s*`, 'i'), '')}</p>
-              </div>
+              <MessageRow key={message.id} message={message} />
             ))}
             {messages.length > MAX_VISIBLE_MESSAGES && (
               <p className="text-xs text-muted-foreground text-center">

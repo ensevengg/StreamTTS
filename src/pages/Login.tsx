@@ -3,18 +3,16 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Twitch, Youtube, Heart } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import TwitchOAuthButton from '@/components/TwitchOAuthButton';
-import YouTubeOAuthButton from '@/components/YouTubeOAuthButton';
+import TwitchLoginButton from '@/components/TwitchLoginButton';
+import YouTubeLoginButton from '@/components/YouTubeLoginButton';
 import { useAuthStore } from '@/stores/authStore';
 
 const Login = () => {
   // Auth state lives in the authStore (hydrated from the OS keychain at app
-  // startup and updated by the OAuth callbacks). Keeping it in the store is
-  // what lets ProtectedRoute admit the user right after a fresh login.
+  // startup and updated by the app-wide auth callbacks). Keeping it in the
+  // store is what lets ProtectedRoute admit the user right after a login.
   const isTwitchAuthed = useAuthStore(s => s.isTwitchAuthed);
   const isYoutubeAuthed = useAuthStore(s => s.isYoutubeAuthed);
-  const setTwitchAuth = useAuthStore(s => s.setTwitchAuth);
-  const setYoutubeAuth = useAuthStore(s => s.setYoutubeAuth);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -36,7 +34,7 @@ const Login = () => {
             Connect your streaming platform to get started
           </p>
         </div>
-        
+
         <Tabs defaultValue="twitch" className="flex-1">
           <TabsList className="grid grid-cols-2 w-full">
             <TabsTrigger value="twitch" className="flex items-center gap-2">
@@ -48,7 +46,7 @@ const Login = () => {
               YouTube
             </TabsTrigger>
           </TabsList>
-          
+
           <div className="mt-6">
             <TabsContent value="twitch">
               <Card className="border-purple-500/30 bg-card/50 backdrop-blur-sm">
@@ -56,32 +54,34 @@ const Login = () => {
                   <Twitch className="h-8 w-8 text-purple-400" />
                   <CardTitle>Connect with Twitch</CardTitle>
                 </CardHeader>
-                <CardContent className="pt-6">
-                  <p className="text-sm text-muted-foreground mb-4">
-                    Authorize to read chat messages from your channel
+                <CardContent className="pt-6 space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    Read-only access: StreamTTS can read your chat and see subs and channel-point
+                    redemptions for alerts. It can't post, moderate or change your channel.
                   </p>
-                  <TwitchOAuthButton onAuthChange={setTwitchAuth} />
+                  <TwitchLoginButton />
                 </CardContent>
               </Card>
             </TabsContent>
-            
+
             <TabsContent value="youtube">
               <Card className="border-red-500/30 bg-card/50 backdrop-blur-sm">
                 <CardHeader className="flex flex-row items-center space-x-4 border-b border-border/40 pb-4">
                   <Youtube className="h-8 w-8 text-red-400" />
                   <CardTitle>Connect with YouTube</CardTitle>
                 </CardHeader>
-                <CardContent className="pt-6">
-                  <p className="text-sm text-muted-foreground mb-4">
-                    Authorize to read live chat from your streams
+                <CardContent className="pt-6 space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    Read-only access: StreamTTS can read your live chat. It can't post, upload,
+                    edit or delete anything on your channel.
                   </p>
-                  <YouTubeOAuthButton onAuthChange={setYoutubeAuth} />
+                  <YouTubeLoginButton />
                 </CardContent>
               </Card>
             </TabsContent>
           </div>
         </Tabs>
-        
+
         <div className="pt-6 text-center text-xs text-muted-foreground mt-auto">
           Made with <Heart className="inline h-3 w-3 text-red-500 mx-1" /> Nerve © 2025
         </div>
