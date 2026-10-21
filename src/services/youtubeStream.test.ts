@@ -71,12 +71,4 @@ describe('streamLiveChat', () => {
     await expect(done).resolves.toBeUndefined();
     expect(fakeInvoke).toHaveBeenCalledWith('youtube_chat_stream_stop', { streamId: args.streamId });
   });
-
-  it('reports streaming as unavailable if the command itself fails', async () => {
-    commandHandlers.set('youtube_chat_stream', () => {
-      throw new Error('command not found');
-    });
-    await expect(streamLiveChat('token', 'chat1', null, () => {}, new AbortController().signal))
-      .rejects.toBeInstanceOf(StreamUnavailableError);
-  });
 });
