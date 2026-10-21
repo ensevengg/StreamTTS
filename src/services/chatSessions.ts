@@ -4,12 +4,8 @@ import { useAuthStore } from '@/stores/authStore';
 import { useChatStore } from '@/stores/chatStore';
 import { cancelTwitchLogin } from '@/services/authService';
 import { ttsQueueService } from '@/services/ttsQueueService';
-import {
-  clearTwitchOAuthToken,
-  connectToTwitchChat,
-  disconnectFromTwitchChat,
-  getTwitchIdentity,
-} from '@/services/twitchService';
+import { TwitchChatSession } from '@/services/twitchChat';
+import { clearTwitchOAuthToken, getTwitchIdentity } from '@/services/twitchService';
 import {
   clearYoutubeOAuthToken,
   connectToYouTubeLiveChat,
@@ -24,9 +20,10 @@ import type { Message } from '@/types/message';
  * session nor lose the handle needed to stop it.
  */
 
-// Bumped whenever a session is replaced or stopped, so late callbacks from
-// the old one are ignored.
-let twitchGeneration = 0;
+let twitch: TwitchChatSession | null = null;
+
+// Bumped whenever the YouTube session is replaced or stopped, so late
+// callbacks from the old one are ignored.
 let youtubeGeneration = 0;
 let youtubeDisconnect: (() => void) | null = null;
 
@@ -37,6 +34,19 @@ function receiveChatMessage(platform: ChatPlatform, id: string, username: string
 }
 
 const randomId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+/** Toasts on the transitions that matter, not on every retry. */
+function statusNotifier(label: string) {
+  let wasConnected = false;
+  return (status: string, detail?: string) => {
+    if (status === 'connected') {
+      toast({ title: wasConnected ? `${label} chat reconnected` : `Connected to ${label}` });
+      wasConnected = true;
+    } else if (status === 'error') {
+      toast({ title: `${label} chat stopped`, description: detail, variant: 'destructive' });
+    }
+  };
+}
 
 // ---- Twitch ---------------------------------------------------------------
 
@@ -49,40 +59,33 @@ export async function connectTwitch(): Promise<void> {
   if (session.status === 'unreachable') {
     throw new Error("Couldn't reach Twitch. Check your internet connection and try again.");
   }
-  const username = session.identity.login;
+  const { login } = session.identity;
 
   stopTwitch();
-  const generation = twitchGeneration;
   useChatStore.getState().upsertConnection({
     id: 'twitch',
     type: 'twitch',
-    channelName: username,
+    channelName: login,
     status: 'connecting',
   });
 
-  await connectToTwitchChat(
-    username,
-    (twitchUser, text) => {
-      if (generation === twitchGeneration) receiveChatMessage('twitch', randomId(), twitchUser, text);
+  const notify = statusNotifier('Twitch');
+  const chat = new TwitchChatSession(login, {
+    onMessage: (m) => receiveChatMessage('twitch', m.id, m.username, m.text),
+    onStatus: (status, detail) => {
+      if (twitch !== chat) return;
+      useChatStore.getState().updateConnection('twitch', { status, detail });
+      notify(status, detail);
+      if (status === 'error' && /log in again/i.test(detail ?? '')) void markTwitchSignedOut();
     },
-    (connected, error) => {
-      if (generation !== twitchGeneration) return;
-      useChatStore.getState().updateConnection('twitch', {
-        status: connected ? 'connected' : 'error',
-        detail: connected ? undefined : error,
-      });
-      if (connected) {
-        toast({ title: 'Connected to Twitch', description: `Now listening to ${username}'s chat` });
-      } else if (error && !error.includes('RECONNECT')) {
-        toast({ title: 'Twitch chat stopped', description: error, variant: 'destructive' });
-      }
-    },
-  );
+  });
+  twitch = chat;
+  chat.start();
 }
 
 function stopTwitch(): void {
-  twitchGeneration += 1;
-  disconnectFromTwitchChat().catch(error => console.error('Error disconnecting from Twitch:', error));
+  twitch?.stop();
+  twitch = null;
 }
 
 export function disconnectTwitch(): void {
@@ -183,4 +186,13 @@ export async function signOutYoutube(): Promise<void> {
   useAuthStore.getState().setYoutubeLoginPending(false);
   await clearYoutubeOAuthToken();
   useAuthStore.getState().setYoutubeAuth(false);
+}
+
+// ---- Wiring ---------------------------------------------------------------
+
+if (typeof window !== 'undefined') {
+  // Don't sit out the rest of a backoff wait once the network is back.
+  window.addEventListener?.('online', () => {
+    twitch?.retryNow();
+  });
 }
