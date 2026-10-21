@@ -1,15 +1,14 @@
 import { Toaster } from "@/components/ui/toaster";
-import { Toaster as Sonner } from "@/components/ui/sonner";
+import { ToastAction } from "@/components/ui/toast";
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useEffect, useRef, lazy, Suspense } from "react";
-import { toast } from "sonner";
+import { toast } from "@/hooks/use-toast";
 import { useAuthStore } from "./stores/authStore";
 import { migrateLegacyCredentials } from "./lib/secureStorage";
 import Loading from "./components/Loading";
 import AlertNotification from "./components/AlertNotification";
 import { useAppUpdate } from "./hooks/useAppUpdate";
 import { useAuthCallbacks } from "./hooks/useAuthCallbacks";
-
 
 // Lazy load page components to improve startup time
 const Index = lazy(() => import("./pages/Index"));
@@ -36,7 +35,7 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
 };
 
 const App = () => {
-  const { updateAvailable, version, checkForUpdates, install, dismiss } = useAppUpdate();
+  const { updateAvailable, version, checkForUpdates, install } = useAppUpdate();
   const updateToastShown = useRef(false);
 
   useAuthCallbacks();
@@ -61,31 +60,22 @@ const App = () => {
   useEffect(() => {
     if (updateAvailable && !updateToastShown.current) {
       updateToastShown.current = true;
-      toast("Update available", {
+      toast({
+        title: "Update available",
         description: `Version ${version} is ready to install`,
-        action: {
-          label: "Update",
-          onClick: () => {
-            install();
-            toast.dismiss();
-          },
-        },
-        cancel: {
-          label: "Later",
-          onClick: () => {
-            dismiss();
-            toast.dismiss();
-          },
-        },
         duration: Infinity,
+        action: (
+          <ToastAction altText="Install the update" onClick={() => void install()}>
+            Update
+          </ToastAction>
+        ),
       });
     }
-  }, [updateAvailable, version, install, dismiss]);
+  }, [updateAvailable, version, install]);
 
   return (
     <>
       <Toaster />
-      <Sonner />
       <AlertNotification />
       <Suspense fallback={<Loading isStartup={true} message="Loading StreamTTS..." />}>
         <HashRouter>

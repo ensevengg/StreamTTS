@@ -69,17 +69,5 @@ export function useAppUpdate() {
     }
   }, []);
 
-  const dismiss = useCallback(() => {
-    updateRef.current = null;
-    setState({
-      checking: false,
-      updateAvailable: false,
-      version: null,
-      notes: null,
-      downloading: false,
-      error: null,
-    });
-  }, []);
-
-  return { ...state, checkForUpdates, install, dismiss };
+  return { ...state, checkForUpdates, install };
 }
