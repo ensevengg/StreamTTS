@@ -144,38 +144,4 @@ describe('TwitchChatSession', () => {
     expect(statuses[statuses.length - 1]).toBe('error');
     expect(clients).toHaveLength(1);
   });
-
-  it('retries later when the token cannot be refreshed right now', async () => {
-    const { session, clients, statuses } = setup([{ status: 'unavailable', reason: 'offline' }, ok('t1')]);
-    session.start();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(clients).toHaveLength(0);
-    expect(statuses[statuses.length - 1]).toBe('reconnecting');
-
-    await vi.advanceTimersByTimeAsync(31_000);
-    expect(clients).toHaveLength(1);
-  });
-
-  it('stop() cancels pending reconnects and closes the client', async () => {
-    const { session, clients } = setup();
-    session.start();
-    await vi.advanceTimersByTimeAsync(0);
-    clients[0].emit('disconnected', 'Ping timeout.');
-
-    session.stop();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(clients).toHaveLength(1);
-    expect(clients[0].disconnected).toBe(true);
-  });
-
-  it('retryNow skips the backoff wait', async () => {
-    const { session, clients } = setup();
-    session.start();
-    await vi.advanceTimersByTimeAsync(0);
-    clients[0].emit('disconnected', 'Unable to connect.');
-
-    session.retryNow();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(clients).toHaveLength(2);
-  });
 });

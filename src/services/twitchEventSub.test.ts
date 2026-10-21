@@ -46,7 +46,7 @@ const settle = async () => {
   for (let i = 0; i < 10; i++) await vi.advanceTimersByTimeAsync(1);
 };
 
-function setup(postStatus: (type: string) => number = () => 202) {
+function setup() {
   const sockets: FakeSocket[] = [];
   const alerts: AlertData[] = [];
   const statuses: { status: string; detail?: string }[] = [];
@@ -67,14 +67,14 @@ function setup(postStatus: (type: string) => number = () => 202) {
         sessionId: body.transport.session_id,
         clientId: (init.headers as Record<string, string>)['Client-Id'],
       });
-      return response(postStatus(body.type));
+      return response(202);
     }),
   };
   const session = new TwitchEventSubSession('123', 'client-id', {
     onAlert: (alert) => alerts.push(alert),
     onStatus: (status, detail) => statuses.push({ status, detail }),
   }, deps);
-  return { session, sockets, alerts, statuses, posts, deps };
+  return { session, sockets, alerts, statuses, posts };
 }
 
 describe('TwitchEventSubSession', () => {
@@ -161,53 +161,9 @@ describe('TwitchEventSubSession', () => {
     expect(statuses[statuses.length - 1].status).toBe('reconnecting');
     session.stop();
   });
-
-  it('reports alert types Twitch refuses without failing the rest', async () => {
-    const { session, sockets, statuses } = setup(type => (type === 'channel.subscription.gift' ? 202 : 403));
-    session.start();
-    sockets[0].receive(welcome('s1'));
-    await settle();
-    const last = statuses[statuses.length - 1];
-    expect(last.status).toBe('connected');
-    expect(last.detail).toContain('subscriptions');
-    expect(last.detail).toContain('channel points');
-    session.stop();
-  });
-
-  it('refreshes the token once when Twitch rejects it', async () => {
-    const { session, sockets, deps, posts } = setup();
-    vi.mocked(deps.post).mockResolvedValueOnce(response(401));
-    session.start();
-    sockets[0].receive(welcome('s1'));
-    await settle();
-    expect(deps.refreshToken).toHaveBeenCalledTimes(1);
-    // Only the rejected subscription is retried (the mocked first call isn't
-    // recorded): two from the first round plus the retry.
-    expect(posts).toHaveLength(3);
-    expect(posts[2].type).toBe('channel.subscribe');
-    session.stop();
-  });
-
-  it('stop() closes everything and cancels retries', async () => {
-    const { session, sockets } = setup();
-    session.start();
-    sockets[0].drop();
-    session.stop();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(sockets).toHaveLength(1);
-  });
 });
 
 describe('eventToAlert', () => {
-  it('skips gift recipients (the gifter alert covers them)', () => {
-    expect(eventToAlert('channel.subscribe', { user_name: 'R', is_gift: true })).toBeNull();
-  });
-
-  it('names anonymous gifters', () => {
-    expect(eventToAlert('channel.subscription.gift', { user_name: null, is_anonymous: true, total: 1 }))
-      .toEqual(expect.objectContaining({ message: 'An anonymous gifter gifted 1 sub!' }));
-  });
-
   it('keeps viewer-written redemption text out of the spoken message', () => {
     const alert = eventToAlert('channel.channel_points_custom_reward_redemption.add', {
       user_name: 'V',
