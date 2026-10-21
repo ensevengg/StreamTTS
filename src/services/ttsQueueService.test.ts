@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { MAX_QUEUE_LENGTH, TtsQueue, type SpeechJob } from './ttsQueueService';
+import { MAX_QUEUE_LENGTH, MAX_QUEUED_PER_VIEWER, TtsQueue, type SpeechJob } from './ttsQueueService';
 import type { SpeakOptions } from './ttsService';
 
 /** Speech that finishes only when the test says so (or is aborted). */
@@ -107,6 +107,18 @@ describe('TtsQueue', () => {
   });
 
 
+
+  it('caps how many jobs one viewer can have waiting', async () => {
+    const speech = controllableSpeech();
+    const { queue } = makeQueue(speech.speak);
+    queue.enqueue(job('first', { owner: 'spammer' }));
+    await flush();
+    for (let i = 0; i < MAX_QUEUED_PER_VIEWER; i++) {
+      expect(queue.enqueue(job(`s${i}`, { owner: 'spammer' }))).toBe(true);
+    }
+    expect(queue.enqueue(job('extra', { owner: 'spammer' }))).toBe(false);
+    expect(queue.enqueue(job('other', { owner: 'someone-else' }))).toBe(true);
+  });
 
   it('marks failures and keeps going', async () => {
     const speak = vi.fn()

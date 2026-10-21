@@ -1,9 +1,11 @@
 import { toast } from '@/hooks/use-toast';
 import { useChatStore } from '@/stores/chatStore';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { ttsQueueService } from '@/services/ttsQueueService';
-import { stripCommandPrefix } from '@/services/ttsFilter';
+import { CooldownTracker, prepareSpeechText, stripCommandPrefix } from '@/services/ttsFilter';
 import type { Message } from '@/types/message';
 
+const cooldowns = new CooldownTracker();
 const ERROR_TOAST_INTERVAL_MS = 30_000;
 let lastErrorToast = 0;
 
@@ -15,23 +17,34 @@ const reportSpeechError = (detail?: string): void => {
   toast({ title: "Couldn't read a message aloud", description: detail, variant: 'destructive' });
 };
 
-/** Speaks a `!г` message and tracks its progress on the message. */
-export function speakChatMessage(message: Message): void {
+/**
+ * Speaks a `!г` message. Viewer messages are subject to the per-viewer
+ * cooldown and queue cap; messages the streamer types are not.
+ */
+export function speakChatMessage(message: Message, { fromViewer }: { fromViewer: boolean }): void {
+  const { ttsMaxLength, ttsViewerCooldownSec } = useSettingsStore.getState();
   const { updateMessageStatus } = useChatStore.getState();
 
-  const text = stripCommandPrefix(message.content).trim();
+  const text = prepareSpeechText(stripCommandPrefix(message.content), ttsMaxLength);
   if (!text) {
     updateMessageStatus(message.id, 'skipped', 'Nothing to read');
     return;
   }
+  const viewer = (message.username || 'anonymous').toLowerCase();
+  if (fromViewer && !cooldowns.allow(viewer, ttsViewerCooldownSec * 1000)) {
+    updateMessageStatus(message.id, 'skipped', 'Viewer cooldown');
+    return;
+  }
 
   updateMessageStatus(message.id, 'queued');
-  ttsQueueService.enqueue({
+  const accepted = ttsQueueService.enqueue({
     id: message.id,
     text,
+    owner: fromViewer ? viewer : undefined,
     onStatus: (status, detail) => {
       useChatStore.getState().updateMessageStatus(message.id, status, detail);
       if (status === 'error') reportSpeechError(detail);
     },
   });
+  if (!accepted) updateMessageStatus(message.id, 'skipped', 'Too many messages from this viewer');
 }

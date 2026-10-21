@@ -6,6 +6,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Mic, MessageSquare, Settings, Radio, Heart, Info, ChevronDown, ChevronRight, SkipForward, ListX } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
+import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -26,7 +27,12 @@ import { getAvailableBrowserVoices } from '@/services/ttsService';
 import { ttsQueueService } from '@/services/ttsQueueService';
 import { speakChatMessage } from '@/services/chatSpeech';
 import { useChatStore } from '@/stores/chatStore';
-import { useSettingsStore, TTSProvider } from '@/stores/settingsStore';
+import {
+  useSettingsStore,
+  TTSProvider,
+  TTS_COOLDOWN_RANGE_SEC,
+  TTS_MAX_LENGTH_RANGE,
+} from '@/stores/settingsStore';
 
 const Index = () => {
   const { toast } = useToast();
@@ -47,6 +53,10 @@ const Index = () => {
   const setVolume = useSettingsStore(s => s.setVolume);
   const setTtsProvider = useSettingsStore(s => s.setTtsProvider);
   const setSelectedVoice = useSettingsStore(s => s.setSelectedVoice);
+  const ttsMaxLength = useSettingsStore(s => s.ttsMaxLength);
+  const ttsViewerCooldownSec = useSettingsStore(s => s.ttsViewerCooldownSec);
+  const setTtsMaxLength = useSettingsStore(s => s.setTtsMaxLength);
+  const setTtsViewerCooldownSec = useSettingsStore(s => s.setTtsViewerCooldownSec);
 
   useEffect(() => {
     if (activeTab === 'chat' && !ttsInitialized) {
@@ -135,7 +145,7 @@ const Index = () => {
     };
 
     addMessage(newMessage);
-    speakChatMessage(newMessage);
+    speakChatMessage(newMessage, { fromViewer: false });
   }, [addMessage]);
 
   return (
@@ -261,6 +271,39 @@ const Index = () => {
                       </div>
                     )}
                     
+                    <div className="rounded-lg border p-4 space-y-4">
+                      <div>
+                        <h4 className="font-medium">Viewer Limits</h4>
+                        <p className="text-sm text-muted-foreground">
+                          Keep one viewer from taking over the voice. Links are read as "link".
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="tts-max-length">Longest message read: {ttsMaxLength} characters</Label>
+                        <Slider
+                          id="tts-max-length"
+                          min={TTS_MAX_LENGTH_RANGE.min}
+                          max={TTS_MAX_LENGTH_RANGE.max}
+                          step={10}
+                          value={[ttsMaxLength]}
+                          onValueChange={([value]) => setTtsMaxLength(value)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="tts-cooldown">
+                          Cooldown per viewer: {ttsViewerCooldownSec === 0 ? 'off' : `${ttsViewerCooldownSec}s`}
+                        </Label>
+                        <Slider
+                          id="tts-cooldown"
+                          min={TTS_COOLDOWN_RANGE_SEC.min}
+                          max={TTS_COOLDOWN_RANGE_SEC.max}
+                          step={5}
+                          value={[ttsViewerCooldownSec]}
+                          onValueChange={([value]) => setTtsViewerCooldownSec(value)}
+                        />
+                      </div>
+                    </div>
+
                     {ttsProvider === 'elevenlabs' && (
                       <div className="grid place-items-center">
                         <ApiKeyInput 

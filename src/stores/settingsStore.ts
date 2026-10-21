@@ -5,11 +5,16 @@ import { secureStateStorage } from '@/lib/secureStorage';
 
 export type TTSProvider = 'browser' | 'elevenlabs';
 
+export const TTS_MAX_LENGTH_RANGE = { min: 50, max: 500 } as const;
+export const TTS_COOLDOWN_RANGE_SEC = { min: 0, max: 120 } as const;
+
 const settingsSchema = z.object({
   apiKey: z.string(),
   volume: z.number().min(0).max(1),
   ttsProvider: z.enum(['browser', 'elevenlabs']),
   selectedVoice: z.string(),
+  ttsMaxLength: z.number().int().min(TTS_MAX_LENGTH_RANGE.min).max(TTS_MAX_LENGTH_RANGE.max),
+  ttsViewerCooldownSec: z.number().int().min(TTS_COOLDOWN_RANGE_SEC.min).max(TTS_COOLDOWN_RANGE_SEC.max),
 });
 
 type Settings = z.infer<typeof settingsSchema>;
@@ -19,6 +24,8 @@ interface SettingsState extends Settings {
   setVolume: (volume: number) => void;
   setTtsProvider: (provider: TTSProvider) => void;
   setSelectedVoice: (voice: string) => void;
+  setTtsMaxLength: (length: number) => void;
+  setTtsViewerCooldownSec: (seconds: number) => void;
 }
 
 const defaults: Settings = {
@@ -26,6 +33,8 @@ const defaults: Settings = {
   volume: 0.7,
   ttsProvider: 'browser',
   selectedVoice: '',
+  ttsMaxLength: 200,
+  ttsViewerCooldownSec: 10,
 };
 
 /**
@@ -53,6 +62,8 @@ export const useSettingsStore = create<SettingsState>()(
       setVolume: (volume) => set({ volume }),
       setTtsProvider: (ttsProvider) => set({ ttsProvider }),
       setSelectedVoice: (selectedVoice) => set({ selectedVoice }),
+      setTtsMaxLength: (ttsMaxLength) => set({ ttsMaxLength }),
+      setTtsViewerCooldownSec: (ttsViewerCooldownSec) => set({ ttsViewerCooldownSec }),
     }),
     {
       name: 'streamtts-settings',

@@ -8,10 +8,13 @@ export type SpeechJobStatus = 'playing' | 'completed' | 'skipped' | 'error';
 export interface SpeechJob {
   id: string;
   text: string;
+  /** Viewer the job came from; caps how many one viewer can have waiting. */
+  owner?: string;
   onStatus?: (status: SpeechJobStatus, detail?: string) => void;
 }
 
 export const MAX_QUEUE_LENGTH = 50;
+export const MAX_QUEUED_PER_VIEWER = 3;
 
 interface QueueDeps {
   speak: (text: string, options: SpeakOptions) => Promise<void>;
@@ -36,7 +39,12 @@ export class TtsQueue {
 
   constructor(private readonly deps: QueueDeps = defaultDeps) {}
 
-  enqueue(job: SpeechJob): void {
+  /** Returns false when the job was refused (viewer already has too many waiting). */
+  enqueue(job: SpeechJob): boolean {
+    if (job.owner) {
+      const queued = this.waiting.filter(j => j.owner === job.owner).length;
+      if (queued >= MAX_QUEUED_PER_VIEWER) return false;
+    }
     if (this.waiting.length >= MAX_QUEUE_LENGTH) {
       // Drop the oldest waiting message. The job being spoken isn't in
       // `waiting`, so it is never the one dropped.
@@ -45,6 +53,7 @@ export class TtsQueue {
     }
     this.waiting.push(job);
     void this.run();
+    return true;
   }
 
   /** Stops whatever is playing; the next job starts right away. */
