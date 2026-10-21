@@ -3,7 +3,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Card } from '@/components/ui/card';
 import { Volume2, User } from 'lucide-react';
 import { Message } from '@/types/message';
-import { TTS_COMMAND_PREFIX } from '@/config/security';
+import { TTS_COMMAND_PREFIX } from '@/config/constants';
 import { useChatStore } from '@/stores/chatStore';
 
 const MAX_VISIBLE_MESSAGES = 100;

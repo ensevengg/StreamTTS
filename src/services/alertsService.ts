@@ -1,6 +1,10 @@
-import { onAlert, type AlertData } from '@/lib/tauri-api';
-
-export type { AlertData };
+export interface AlertData {
+  platform: string;
+  alert_type: string;
+  user_name: string;
+  message: string;
+  count?: number;
+}
 
 export interface AlertSettings {
   enabled: boolean;
@@ -15,7 +19,6 @@ export class AlertService {
   private static instance: AlertService;
   private settings: AlertSettings;
   private listeners: Array<(alert: AlertData) => void> = [];
-  private alertCleanup: (() => void) | null = null;
 
   private constructor() {
     this.settings = this.loadSettings();
@@ -28,12 +31,6 @@ export class AlertService {
     return AlertService.instance;
   }
 
-  public initialize(): void {
-    this.alertCleanup = onAlert((alert: AlertData) => {
-      this.handleAlert(alert);
-    });
-  }
-
   private handleAlert(alert: AlertData): void {
     if (!this.settings.enabled) {
       return;
@@ -44,13 +41,6 @@ export class AlertService {
     }
 
     this.processAlert(alert);
-  }
-
-  public cleanup(): void {
-    if (this.alertCleanup) {
-      this.alertCleanup();
-      this.alertCleanup = null;
-    }
   }
 
   public getSettings(): AlertSettings {

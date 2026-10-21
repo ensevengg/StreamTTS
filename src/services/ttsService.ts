@@ -1,6 +1,6 @@
 
 import { Message } from '@/types/message';
-import { TTS_COMMAND_PREFIX } from '@/config/security';
+import { TTS_COMMAND_PREFIX } from '@/config/constants';
 
 interface TTSRequestOptions {
   text: string;

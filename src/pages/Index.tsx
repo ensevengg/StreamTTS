@@ -24,24 +24,12 @@ import { getAvailableBrowserVoices } from '@/services/ttsService';
 import { useChatStore } from '@/stores/chatStore';
 import { useSettingsStore, TTSProvider } from '@/stores/settingsStore';
 import { useTtsQueue } from '@/hooks/useTtsQueue';
-import { useAuthStore } from '@/stores/authStore';
-import { useOAuthCallback } from '@/hooks/useOAuthCallback';
 
 const Index = () => {
   const { toast } = useToast();
   const [isHowToUseOpen, setIsHowToUseOpen] = useState<boolean>(false);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [ttsInitialized, setTtsInitialized] = useState<boolean>(false);
-
-  // Mounted here (not inside a tab) so the auth-callback listener stays alive
-  // no matter which tab is active while the OAuth browser window is open.
-  const setTwitchAuth = useAuthStore(s => s.setTwitchAuth);
-  const setYoutubeAuth = useAuthStore(s => s.setYoutubeAuth);
-  useOAuthCallback({
-    onTwitchAuth: useCallback(() => setTwitchAuth(true), [setTwitchAuth]),
-    onYoutubeAuth: useCallback(() => setYoutubeAuth(true), [setYoutubeAuth]),
-    toast,
-  });
 
   const activeTab = useChatStore(s => s.activeTab);
   const isProcessing = useChatStore(s => s.isProcessing);
@@ -308,7 +296,8 @@ const Index = () => {
                       <Info className="h-4 w-4 text-yellow-500" />
                       <AlertTitle>Privacy</AlertTitle>
                       <AlertDescription>
-                        Your API keys and tokens are stored locally and never sent to external servers.
+                        Your logins and API key are stored in your system's keychain on this computer. They are only
+                        sent to the service they belong to (Twitch, Google or ElevenLabs).
                       </AlertDescription>
                     </Alert>
                   </div>

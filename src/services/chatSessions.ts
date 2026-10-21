@@ -1,13 +1,14 @@
 import { toast } from '@/hooks/use-toast';
-import { TTS_COMMAND_PREFIX } from '@/config/security';
+import { TTS_COMMAND_PREFIX } from '@/config/constants';
 import { useAuthStore } from '@/stores/authStore';
 import { useChatStore } from '@/stores/chatStore';
+import { cancelTwitchLogin } from '@/services/authService';
 import { ttsQueueService } from '@/services/ttsQueueService';
 import {
   clearTwitchOAuthToken,
   connectToTwitchChat,
   disconnectFromTwitchChat,
-  getTwitchUsername,
+  getTwitchIdentity,
 } from '@/services/twitchService';
 import {
   clearYoutubeOAuthToken,
@@ -40,8 +41,15 @@ const randomId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 // ---- Twitch ---------------------------------------------------------------
 
 export async function connectTwitch(): Promise<void> {
-  const username = await getTwitchUsername();
-  if (!username) throw new Error('Could not determine your Twitch username.');
+  const session = await getTwitchIdentity();
+  if (session.status === 'signed_out') {
+    await signOutTwitch();
+    throw new Error('Your Twitch session expired. Log in again.');
+  }
+  if (session.status === 'unreachable') {
+    throw new Error("Couldn't reach Twitch. Check your internet connection and try again.");
+  }
+  const username = session.identity.login;
 
   stopTwitch();
   const generation = twitchGeneration;
@@ -82,10 +90,16 @@ export function disconnectTwitch(): void {
   useChatStore.getState().removeConnection('twitch');
 }
 
-export async function signOutTwitch(): Promise<void> {
-  disconnectTwitch();
+async function markTwitchSignedOut(): Promise<void> {
   await clearTwitchOAuthToken();
   useAuthStore.getState().setTwitchAuth(false);
+}
+
+export async function signOutTwitch(): Promise<void> {
+  disconnectTwitch();
+  useAuthStore.getState().setTwitchLogin(null);
+  await cancelTwitchLogin().catch(() => {});
+  await markTwitchSignedOut();
 }
 
 // ---- YouTube --------------------------------------------------------------
@@ -166,6 +180,7 @@ export function disconnectYoutube(): void {
 
 export async function signOutYoutube(): Promise<void> {
   disconnectYoutube();
+  useAuthStore.getState().setYoutubeLoginPending(false);
   await clearYoutubeOAuthToken();
   useAuthStore.getState().setYoutubeAuth(false);
 }

@@ -16,8 +16,8 @@ import {
   signOutYoutube,
 } from '@/services/chatSessions';
 import type { ChatConnection, ConnectionStatus } from '@/types/chatSource';
-import TwitchOAuthButton from '@/components/TwitchOAuthButton';
-import YouTubeOAuthButton from '@/components/YouTubeOAuthButton';
+import TwitchLoginButton from '@/components/TwitchLoginButton';
+import YouTubeLoginButton from '@/components/YouTubeLoginButton';
 import DiagnoseYouTube from '@/components/DiagnoseYouTube';
 
 const STATUS_LABELS: Record<ConnectionStatus, string> = {
@@ -126,8 +126,6 @@ const ChatConnections: React.FC = () => {
   const connections = useChatStore(s => s.connections);
   const isTwitchAuthed = useAuthStore(s => s.isTwitchAuthed);
   const isYoutubeAuthed = useAuthStore(s => s.isYoutubeAuthed);
-  const setTwitchAuth = useAuthStore(s => s.setTwitchAuth);
-  const setYoutubeAuth = useAuthStore(s => s.setYoutubeAuth);
   const live = connections.filter(c => c.status === 'connected').length;
 
   return (
@@ -143,7 +141,7 @@ const ChatConnections: React.FC = () => {
         accent="border-purple-500/30"
         isAuthed={isTwitchAuthed}
         connection={connections.find(c => c.id === 'twitch')}
-        loginButton={<TwitchOAuthButton onAuthChange={setTwitchAuth} />}
+        loginButton={<TwitchLoginButton />}
         onConnect={connectTwitch}
         onDisconnect={disconnectTwitch}
         onLogout={signOutTwitch}
@@ -155,7 +153,7 @@ const ChatConnections: React.FC = () => {
         accent="border-red-500/30"
         isAuthed={isYoutubeAuthed}
         connection={connections.find(c => c.id === 'youtube')}
-        loginButton={<YouTubeOAuthButton onAuthChange={setYoutubeAuth} />}
+        loginButton={<YouTubeLoginButton />}
         extraActions={<DiagnoseYouTube />}
         onConnect={connectYoutube}
         onDisconnect={disconnectYoutube}

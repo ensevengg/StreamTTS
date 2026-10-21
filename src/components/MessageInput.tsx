@@ -3,7 +3,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Send, Volume2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { TTS_COMMAND_PREFIX } from '@/config/security';
+import { TTS_COMMAND_PREFIX } from '@/config/constants';
 
 interface MessageInputProps {
   onSendMessage: (message: string) => void;

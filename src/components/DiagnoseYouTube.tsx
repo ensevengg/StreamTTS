@@ -12,7 +12,8 @@ const DiagnoseYouTube: React.FC<DiagnoseYouTubeProps> = ({ onDiagnosticsComplete
   const { toast } = useToast();
 
   const diagnoseYouTubeIssues = useCallback(async () => {
-    const token = await getValidYoutubeToken();
+    const result = await getValidYoutubeToken();
+    const token = result.status === 'ok' ? result.token : null;
     if (!token) {
       toast({
         title: "Not Logged In",

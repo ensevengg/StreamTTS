@@ -1,8 +1,10 @@
-import { invoke } from '@tauri-apps/api/core';
-import { isTauriAvailable } from '@/lib/tauri-api';
+import { invoke, isSignedOutError, isTauriAvailable, type RefreshedTokens } from '@/lib/tauri-api';
 import { secureGet, secureSet, secureDelete } from '@/lib/secureStorage';
+import { errorMessage } from '@/lib/http';
 
 const YOUTUBE_TOKEN_KEY = 'youtube_oauth_tokens';
+/** Refresh this long before the 1-hour access token runs out. */
+const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 
 export interface YouTubeTokens {
   access_token: string;
@@ -10,21 +12,17 @@ export interface YouTubeTokens {
   expires_at: number;
 }
 
-interface TokenResponse {
-  access_token: string;
-  refresh_token?: string;
-  expires_in: number;
-  token_type: string;
-}
+/** Same contract as the Twitch service: `unavailable` is retryable. */
+export type TokenResult =
+  | { status: 'ok'; token: string }
+  | { status: 'signed_out' }
+  | { status: 'unavailable'; reason: string };
 
-let refreshPromise: Promise<string | null> | null = null;
+// Bumped on logout so an in-flight refresh can't restore a cleared session.
+let sessionGeneration = 0;
+let refreshInFlight: Promise<TokenResult> | null = null;
 
-export const hasYoutubeOAuthToken = async (): Promise<boolean> => {
-  const tokens = await getStoredTokens();
-  return !!tokens && !!tokens.access_token;
-};
-
-export const getStoredTokens = async (): Promise<YouTubeTokens | null> => {
+const getStoredTokens = async (): Promise<YouTubeTokens | null> => {
   try {
     const stored = await secureGet(YOUTUBE_TOKEN_KEY);
     if (!stored) return null;
@@ -34,109 +32,87 @@ export const getStoredTokens = async (): Promise<YouTubeTokens | null> => {
   }
 };
 
+export const hasYoutubeOAuthToken = async (): Promise<boolean> =>
+  !!(await getStoredTokens())?.access_token;
+
 export const saveYoutubeTokens = async (tokens: YouTubeTokens): Promise<void> => {
   await secureSet(YOUTUBE_TOKEN_KEY, JSON.stringify(tokens));
 };
 
 export const clearYoutubeOAuthToken = async (): Promise<void> => {
+  sessionGeneration += 1;
   await secureDelete(YOUTUBE_TOKEN_KEY);
 };
 
-const refreshYoutubeToken = async (): Promise<string | null> => {
-  if (refreshPromise) {
-    return refreshPromise;
-  }
-
-  refreshPromise = doRefresh();
-  const result = await refreshPromise;
-  refreshPromise = null;
-  return result;
-};
-
-const doRefresh = async (): Promise<string | null> => {
+const doRefresh = async (): Promise<TokenResult> => {
   const tokens = await getStoredTokens();
-  if (!tokens || !tokens.refresh_token) {
-    console.log("YouTubeService: No refresh token available");
-    return null;
-  }
-
+  if (!tokens?.refresh_token) return { status: 'signed_out' };
   if (!isTauriAvailable()) {
-    console.warn("YouTubeService: Token refresh requires the StreamTTS desktop app");
-    return null;
+    return { status: 'unavailable', reason: 'Token refresh requires the StreamTTS desktop app' };
   }
 
-  const maxRetries = 3;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      const data: TokenResponse = await invoke('youtube_refresh_token', {
-        refreshToken: tokens.refresh_token,
-      });
-
-      const newTokens: YouTubeTokens = {
-        access_token: data.access_token,
-        refresh_token: data.refresh_token || tokens.refresh_token,
-        expires_at: Date.now() + (data.expires_in * 1000),
-      };
-
-      await saveYoutubeTokens(newTokens);
-      console.log("YouTubeService: Token refreshed successfully");
-      return data.access_token;
-    } catch (error) {
-      const err = error as { kind?: string };
-      console.error("YouTubeService: Token refresh failed", err);
-
-      if (err?.kind === 'invalid_grant' || err?.kind === 'invalid_client') {
-        console.log("YouTubeService: Refresh token is invalid, clearing tokens");
-        await clearYoutubeOAuthToken();
-        return null;
-      }
-
-      if (err?.kind === 'not_configured') {
-        return null;
-      }
-
-      if (attempt < maxRetries - 1) {
-        const delay = 1000 * (attempt + 1);
-        console.log(`YouTubeService: Refresh attempt ${attempt + 1} failed, retrying in ${delay}ms...`);
-        await new Promise(r => setTimeout(r, delay));
-      }
+  const generation = sessionGeneration;
+  try {
+    const data = await invoke<RefreshedTokens>('youtube_refresh_token', {
+      refreshToken: tokens.refresh_token,
+    });
+    if (generation !== sessionGeneration) return { status: 'signed_out' };
+    await saveYoutubeTokens({
+      access_token: data.access_token,
+      refresh_token: data.refresh_token || tokens.refresh_token,
+      expires_at: Date.now() + (data.expires_in ?? 3600) * 1000,
+    });
+    return { status: 'ok', token: data.access_token };
+  } catch (error) {
+    if (isSignedOutError(error)) {
+      if (generation === sessionGeneration) await clearYoutubeOAuthToken();
+      return { status: 'signed_out' };
     }
+    return { status: 'unavailable', reason: errorMessage(error) };
   }
-
-  console.log("YouTubeService: All refresh attempts failed, keeping existing tokens");
-  return null;
 };
 
-export const getValidYoutubeToken = async (): Promise<string | null> => {
+/** Concurrent callers share one refresh request. */
+const refreshYoutubeToken = (): Promise<TokenResult> => {
+  if (!refreshInFlight) {
+    refreshInFlight = doRefresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+};
+
+export const getValidYoutubeToken = async (): Promise<TokenResult> => {
   const tokens = await getStoredTokens();
-  if (!tokens || !tokens.access_token) {
-    return null;
+  if (!tokens?.access_token) return { status: 'signed_out' };
+  if (Date.now() < tokens.expires_at - TOKEN_EXPIRY_BUFFER_MS) {
+    return { status: 'ok', token: tokens.access_token };
   }
 
-  const bufferMs = 5 * 60 * 1000;
-  if (Date.now() >= (tokens.expires_at - bufferMs)) {
-    console.log("YouTubeService: Token expired or expiring soon, refreshing...");
-    const newToken = await refreshYoutubeToken();
-    if (newToken) return newToken;
+  const refreshed = await refreshYoutubeToken();
+  if (refreshed.status !== 'unavailable') return refreshed;
+  // Refresh failed for now; the current token still works until it expires.
+  return Date.now() < tokens.expires_at ? { status: 'ok', token: tokens.access_token } : refreshed;
+};
 
-    if (tokens.access_token && Date.now() < tokens.expires_at) {
-      console.log("YouTubeService: Refresh failed, using existing token as fallback");
-      return tokens.access_token;
-    }
-    return null;
-  }
+/** After a 401 the stored token is dead even if our clock disagrees. */
+export const invalidateYoutubeAccessToken = async (): Promise<void> => {
+  const tokens = await getStoredTokens();
+  if (tokens) await saveYoutubeTokens({ ...tokens, expires_at: 0 });
+};
 
-  return tokens.access_token;
+/** The access token for the requests below, or the error to show instead. */
+const requireToken = async (): Promise<string> => {
+  const result = await getValidYoutubeToken();
+  if (result.status === 'ok') return result.token;
+  throw new Error(result.status === 'signed_out'
+    ? 'Please log in to YouTube first.'
+    : `Couldn't reach YouTube: ${result.reason}`);
 };
 
 export const fetchYouTubeLiveBroadcasts = async (): Promise<any[]> => {
   try {
-    const token = await getValidYoutubeToken();
-    if (!token) {
-      console.error("YouTube Service: No OAuth token available");
-      throw new Error('Please log in to YouTube first.');
-    }
+    const token = await requireToken();
 
     if (typeof token !== 'string' || token.trim().length === 0) {
       console.error("YouTube Service: Invalid token format");
@@ -223,8 +199,7 @@ export const fetchYouTubeLiveBroadcasts = async (): Promise<any[]> => {
 };
 
 async function fetchLiveChatId(broadcastId: string): Promise<string> {
-  const token = await getValidYoutubeToken();
-  if (!token) throw new Error('Please log in to YouTube first.');
+  const token = await requireToken();
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20000);
@@ -281,8 +256,7 @@ class YouTubeChatPoller {
     if (!this.isConnected) return;
 
     try {
-      const token = await getValidYoutubeToken();
-      if (!token) throw new Error('YouTube authentication expired. Please log in again.');
+      const token = await requireToken();
 
       const url = new URL('https://www.googleapis.com/youtube/v3/liveChat/messages');
       url.searchParams.append('part', 'snippet,authorDetails');

@@ -91,17 +91,4 @@ describe('AlertService', () => {
       svc.removeAlertListener(vi.fn());
     });
   });
-
-  describe('cleanup safety', () => {
-    it('cleanup before initialize does not throw', () => {
-      const svc = AlertService.getInstance();
-      svc.cleanup();
-    });
-
-    it('cleanup can be called multiple times', () => {
-      const svc = AlertService.getInstance();
-      svc.cleanup();
-      svc.cleanup();
-    });
-  });
 });

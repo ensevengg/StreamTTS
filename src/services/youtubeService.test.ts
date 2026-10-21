@@ -1,100 +1,64 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { commandHandlers, desktopTauriApi, keychain, resetDesktop } from '@/test/desktopMock';
 
-const localStorageMock = (() => {
-  let store: Record<string, string> = {};
-  return {
-    getItem: vi.fn((key: string) => store[key] ?? null),
-    setItem: vi.fn((key: string, value: string) => { store[key] = value; }),
-    removeItem: vi.fn((key: string) => { delete store[key]; }),
-    clear: vi.fn(() => { store = {}; }),
-  };
-})();
-Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock });
+vi.mock('@/lib/tauri-api', () => desktopTauriApi());
 
 import {
-  hasYoutubeOAuthToken,
-  getStoredTokens,
-  saveYoutubeTokens,
   clearYoutubeOAuthToken,
   getValidYoutubeToken,
-  generateColorFromChannelId,
+  hasYoutubeOAuthToken,
+  invalidateYoutubeAccessToken,
+  saveYoutubeTokens,
 } from './youtubeService';
 
-const makeTokens = (overrides = {}) => ({
-  access_token: 'ya29.abc',
-  refresh_token: '1//def',
-  expires_at: Date.now() + 3600 * 1000,
-  ...overrides,
-});
+const KEY = 'youtube_oauth_tokens';
+const tokens = (msLeft: number) => ({ access_token: 'ya29.old', refresh_token: '1//r', expires_at: Date.now() + msLeft });
 
-describe('youtubeService token storage', () => {
+describe('youtubeService tokens', () => {
   beforeEach(() => {
-    localStorageMock.clear();
-    vi.clearAllMocks();
+    resetDesktop();
+    vi.unstubAllGlobals();
   });
 
-  it('round-trips tokens', async () => {
-    const t = makeTokens();
-    await saveYoutubeTokens(t);
+  it('round-trips and clears tokens', async () => {
+    await saveYoutubeTokens(tokens(3_600_000));
     expect(await hasYoutubeOAuthToken()).toBe(true);
-    expect(await getStoredTokens()).toEqual(t);
-  });
-
-  it('clear removes tokens', async () => {
-    await saveYoutubeTokens(makeTokens());
     await clearYoutubeOAuthToken();
     expect(await hasYoutubeOAuthToken()).toBe(false);
-    expect(await getStoredTokens()).toBeNull();
   });
 
-  it('returns null when nothing stored', async () => {
-    expect(await getStoredTokens()).toBeNull();
-    expect(await hasYoutubeOAuthToken()).toBe(false);
+  it('refreshes near expiry, once for concurrent callers', async () => {
+    await saveYoutubeTokens(tokens(60_000));
+    const refresh = vi.fn(async () => ({ access_token: 'ya29.new', expires_in: 3599 }));
+    commandHandlers.set('youtube_refresh_token', refresh);
+
+    const [a, b] = await Promise.all([getValidYoutubeToken(), getValidYoutubeToken()]);
+    expect(a).toEqual({ status: 'ok', token: 'ya29.new' });
+    expect(b).toEqual({ status: 'ok', token: 'ya29.new' });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    // Google omits the refresh token on refresh; the old one is kept.
+    expect(JSON.parse(keychain.get(KEY)!).refresh_token).toBe('1//r');
   });
 
-  it('getValidYoutubeToken returns token when fresh', async () => {
-    await saveYoutubeTokens(makeTokens({ expires_at: Date.now() + 3600 * 1000 }));
-    const t = await getValidYoutubeToken();
-    expect(t).toBe('ya29.abc');
+  it('signs out on invalid_grant but not on network failure', async () => {
+    await saveYoutubeTokens(tokens(-1));
+    commandHandlers.set('youtube_refresh_token', () => {
+      throw { kind: 'network', message: 'offline' };
+    });
+    expect((await getValidYoutubeToken()).status).toBe('unavailable');
+    expect(keychain.has(KEY)).toBe(true);
+
+    commandHandlers.set('youtube_refresh_token', () => {
+      throw { kind: 'invalid_grant', message: 'Token has been expired or revoked.' };
+    });
+    expect(await getValidYoutubeToken()).toEqual({ status: 'signed_out' });
+    expect(keychain.has(KEY)).toBe(false);
   });
 
-  it('getValidYoutubeToken returns null when no tokens stored', async () => {
-    expect(await getValidYoutubeToken()).toBeNull();
-  });
-
-  it('survives corrupted storage', async () => {
-    localStorageMock.setItem('youtube_oauth_tokens', '{bad');
-    expect(await getStoredTokens()).toBeNull();
-    expect(await hasYoutubeOAuthToken()).toBe(false);
-  });
-
-  it('survives token with empty access_token', async () => {
-    await saveYoutubeTokens(makeTokens({ access_token: '' }));
-    expect(await hasYoutubeOAuthToken()).toBe(false);
-  });
-});
-
-describe('generateColorFromChannelId', () => {
-  it('returns hsl string', () => {
-    const color = generateColorFromChannelId('UCabc123');
-    expect(color).toMatch(/^hsl\(\d+, 70%, 50%\)$/);
-  });
-
-  it('is deterministic for same channelId', () => {
-    const a = generateColorFromChannelId('UCsame');
-    const b = generateColorFromChannelId('UCsame');
-    expect(a).toBe(b);
-  });
-
-  it('handles empty string', () => {
-    const color = generateColorFromChannelId('');
-    expect(color).toMatch(/^hsl\(\d+, 70%, 50%\)$/);
-  });
-
-  it('produces value in 0-359 range for hue', () => {
-    const color = generateColorFromChannelId('UCanything');
-    const hue = parseInt(color.match(/\d+/)?.[0] ?? '0', 10);
-    expect(hue).toBeGreaterThanOrEqual(0);
-    expect(hue).toBeLessThan(360);
+  it('invalidating the access token forces the next read to refresh', async () => {
+    await saveYoutubeTokens(tokens(3_600_000));
+    await invalidateYoutubeAccessToken();
+    commandHandlers.set('youtube_refresh_token', async () => ({ access_token: 'ya29.new', expires_in: 3599 }));
+    expect(await getValidYoutubeToken()).toEqual({ status: 'ok', token: 'ya29.new' });
   });
 });

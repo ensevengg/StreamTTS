@@ -2,14 +2,13 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useEffect, useRef, lazy, Suspense } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { useAuthStore } from "./stores/authStore";
 import { migrateLegacyCredentials } from "./lib/secureStorage";
 import Loading from "./components/Loading";
-import { AlertService } from "./services/alertsService";
 import AlertNotification from "./components/AlertNotification";
 import { useAppUpdate } from "./hooks/useAppUpdate";
+import { useAuthCallbacks } from "./hooks/useAuthCallbacks";
 
 
 // Lazy load page components to improve startup time
@@ -39,6 +38,8 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
 const App = () => {
   const { updateAvailable, version, checkForUpdates, install, dismiss } = useAppUpdate();
   const updateToastShown = useRef(false);
+
+  useAuthCallbacks();
 
   useEffect(() => {
     checkForUpdates();
@@ -80,31 +81,6 @@ const App = () => {
       });
     }
   }, [updateAvailable, version, install, dismiss]);
-
-  useEffect(() => {
-    try {
-      const alertService = AlertService.getInstance();
-      alertService.initialize();
-      return () => alertService.cleanup();
-    } catch (error) {
-      console.error('Failed to initialize alert service:', error);
-    }
-  }, []);
-
-  // The Rust loopback OAuth server runs asynchronously; if it fails to bind
-  // (e.g. port 3000 is taken), login will silently fail without this signal.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen<string>('oauth-server-error', (event) => {
-      toast.error("Login server failed to start", {
-        description: String(event.payload),
-        duration: 10000,
-      });
-    })
-      .then((fn) => { unlisten = fn; })
-      .catch(() => {});
-    return () => { unlisten?.(); };
-  }, []);
 
   return (
     <>
