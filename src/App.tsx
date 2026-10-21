@@ -3,7 +3,6 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useEffect, useRef, lazy, Suspense } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAuthStore } from "./stores/authStore";
 import { migrateLegacyCredentials } from "./lib/secureStorage";
@@ -12,15 +11,6 @@ import { AlertService } from "./services/alertsService";
 import AlertNotification from "./components/AlertNotification";
 import { useAppUpdate } from "./hooks/useAppUpdate";
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 2,
-      staleTime: 30 * 1000,
-      refetchOnWindowFocus: false,
-    },
-  },
-});
 
 // Lazy load page components to improve startup time
 const Index = lazy(() => import("./pages/Index"));
@@ -117,7 +107,7 @@ const App = () => {
   }, []);
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <>
       <Toaster />
       <Sonner />
       <AlertNotification />
@@ -137,7 +127,7 @@ const App = () => {
           </Routes>
         </HashRouter>
       </Suspense>
-    </QueryClientProvider>
+    </>
   );
 };
 

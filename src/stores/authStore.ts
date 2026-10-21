@@ -10,8 +10,6 @@ interface AuthState {
   setTwitchAuth: (authed: boolean) => void;
   setYoutubeAuth: (authed: boolean) => void;
   hydrate: () => Promise<void>;
-  logoutTwitch: () => void;
-  logoutYoutube: () => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -29,7 +27,4 @@ export const useAuthStore = create<AuthState>((set) => ({
     ]);
     set({ isTwitchAuthed: twitch, isYoutubeAuthed: youtube, hydrated: true });
   },
-
-  logoutTwitch: () => set({ isTwitchAuthed: false }),
-  logoutYoutube: () => set({ isYoutubeAuthed: false }),
 }));

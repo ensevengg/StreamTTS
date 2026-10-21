@@ -11,13 +11,7 @@ const makeMsg = (id: string): Message => ({
   status: 'pending',
 });
 
-const makeConn = (id: string): ChatConnection => ({
-  id,
-  type: 'twitch',
-  channelName: 'streamer',
-  isConnected: false,
-  status: 'idle',
-});
+const twitch: ChatConnection = { id: 'twitch', type: 'twitch', channelName: 'streamer', status: 'connecting' };
 
 describe('chatStore', () => {
   beforeEach(() => {
@@ -67,44 +61,26 @@ describe('chatStore', () => {
   });
 
   describe('connections', () => {
-    it('adds a connection', () => {
-      useChatStore.getState().addConnection(makeConn('twitch-1'));
-      expect(useChatStore.getState().connections).toHaveLength(1);
+    it('keeps one connection per platform', () => {
+      const store = useChatStore.getState();
+      store.upsertConnection(twitch);
+      store.upsertConnection({ ...twitch, channelName: 'other' });
+      expect(useChatStore.getState().connections).toEqual([{ ...twitch, channelName: 'other' }]);
+    });
+
+    it('patches status and detail', () => {
+      const store = useChatStore.getState();
+      store.upsertConnection(twitch);
+      store.updateConnection('twitch', { status: 'reconnecting', detail: 'Ping timeout' });
+      expect(useChatStore.getState().connections[0]).toMatchObject({ status: 'reconnecting', detail: 'Ping timeout' });
     });
 
     it('removes a connection', () => {
-      useChatStore.getState().addConnection(makeConn('twitch-1'));
-      useChatStore.getState().removeConnection('twitch-1');
-      expect(useChatStore.getState().connections).toHaveLength(0);
-    });
-
-    it('removeConnection handles nonexistent id gracefully', () => {
-      useChatStore.getState().addConnection(makeConn('twitch-1'));
-      useChatStore.getState().removeConnection('nonexistent');
-      expect(useChatStore.getState().connections).toHaveLength(1);
-    });
-
-    it('updates connection status', () => {
-      useChatStore.getState().addConnection(makeConn('twitch-1'));
-      useChatStore.getState().updateConnectionStatus('twitch-1', true);
-      expect(useChatStore.getState().connections[0].isConnected).toBe(true);
-      expect(useChatStore.getState().connections[0].error).toBeUndefined();
-    });
-
-    it('updateConnectionStatus sets error', () => {
-      useChatStore.getState().addConnection(makeConn('twitch-1'));
-      useChatStore.getState().updateConnectionStatus('twitch-1', false, 'Network down');
-      expect(useChatStore.getState().connections[0].isConnected).toBe(false);
-      expect(useChatStore.getState().connections[0].error).toBe('Network down');
-    });
-
-    it('tracks multiple platforms independently', () => {
       const store = useChatStore.getState();
-      store.addConnection({ ...makeConn('twitch-1'), type: 'twitch' });
-      store.addConnection({ ...makeConn('youtube-1'), type: 'youtube' });
-      store.updateConnectionStatus('twitch-1', true);
-      store.updateConnectionStatus('youtube-1', true);
-      expect(useChatStore.getState().connections.filter(c => c.isConnected)).toHaveLength(2);
+      store.upsertConnection(twitch);
+      store.upsertConnection({ id: 'youtube', type: 'youtube', channelName: 'yt', status: 'waiting' });
+      store.removeConnection('twitch');
+      expect(useChatStore.getState().connections.map(c => c.id)).toEqual(['youtube']);
     });
   });
 

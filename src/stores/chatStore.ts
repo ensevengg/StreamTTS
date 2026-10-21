@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { Message } from '@/types/message';
-import { ChatConnection, ConnectionStatus } from '@/types/chatSource';
+import { ChatConnection, ChatPlatform } from '@/types/chatSource';
 
 const MAX_MESSAGES = 500;
 
@@ -11,9 +11,9 @@ interface ChatState {
   isProcessing: boolean;
   addMessage: (message: Message) => void;
   updateMessageStatus: (id: string, status: Message['status']) => void;
-  addConnection: (connection: ChatConnection) => void;
-  removeConnection: (id: string) => void;
-  updateConnectionStatus: (id: string, isConnected: boolean, error?: string, status?: ConnectionStatus) => void;
+  upsertConnection: (connection: ChatConnection) => void;
+  updateConnection: (id: ChatPlatform, patch: Partial<Omit<ChatConnection, 'id' | 'type'>>) => void;
+  removeConnection: (id: ChatPlatform) => void;
   setActiveTab: (tab: string) => void;
   setIsProcessing: (processing: boolean) => void;
 }
@@ -37,19 +37,19 @@ export const useChatStore = create<ChatState>((set) => ({
       ),
     })),
 
-  addConnection: (connection) =>
-    set((state) => ({ connections: [...state.connections, connection] })),
+  upsertConnection: (connection) =>
+    set((state) => ({
+      connections: [...state.connections.filter((c) => c.id !== connection.id), connection],
+    })),
+
+  updateConnection: (id, patch) =>
+    set((state) => ({
+      connections: state.connections.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+    })),
 
   removeConnection: (id) =>
     set((state) => ({
       connections: state.connections.filter((c) => c.id !== id),
-    })),
-
-  updateConnectionStatus: (id, isConnected, error, status) =>
-    set((state) => ({
-      connections: state.connections.map((c) =>
-        c.id === id ? { ...c, isConnected, error, ...(status ? { status } : {}) } : c
-      ),
     })),
 
   setActiveTab: (tab) => set({ activeTab: tab }),
