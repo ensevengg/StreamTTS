@@ -6,11 +6,8 @@ import { cancelTwitchLogin } from '@/services/authService';
 import { ttsQueueService } from '@/services/ttsQueueService';
 import { TwitchChatSession } from '@/services/twitchChat';
 import { clearTwitchOAuthToken, getTwitchIdentity } from '@/services/twitchService';
-import {
-  clearYoutubeOAuthToken,
-  connectToYouTubeLiveChat,
-  fetchYouTubeLiveBroadcasts,
-} from '@/services/youtubeService';
+import { YouTubeChatSession } from '@/services/youtubeChat';
+import { clearYoutubeOAuthToken, hasYoutubeOAuthToken } from '@/services/youtubeService';
 import type { ChatPlatform } from '@/types/chatSource';
 import type { Message } from '@/types/message';
 
@@ -21,19 +18,13 @@ import type { Message } from '@/types/message';
  */
 
 let twitch: TwitchChatSession | null = null;
+let youtube: YouTubeChatSession | null = null;
 
-// Bumped whenever the YouTube session is replaced or stopped, so late
-// callbacks from the old one are ignored.
-let youtubeGeneration = 0;
-let youtubeDisconnect: (() => void) | null = null;
-
-function receiveChatMessage(platform: ChatPlatform, id: string, username: string, text: string, timestamp = Date.now()): void {
-  const message: Message = { id: `${platform}-${id}`, content: text, timestamp, username, status: 'pending' };
+function receiveChatMessage(platform: ChatPlatform, id: string, username: string, text: string): void {
+  const message: Message = { id: `${platform}-${id}`, content: text, timestamp: Date.now(), username, status: 'pending' };
   useChatStore.getState().addMessage(message);
   if (text.startsWith(TTS_COMMAND_PREFIX)) ttsQueueService.enqueue(message);
 }
-
-const randomId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 /** Toasts on the transitions that matter, not on every retry. */
 function statusNotifier(label: string) {
@@ -107,73 +98,40 @@ export async function signOutTwitch(): Promise<void> {
 
 // ---- YouTube --------------------------------------------------------------
 
-interface LiveBroadcast {
-  id: string;
-  snippet?: { title?: string };
-}
-
-interface LiveChatItem {
-  id?: string;
-  snippet?: { displayMessage?: string; publishedAt?: string };
-  authorDetails?: { displayName?: string };
-}
-
-export async function connectYoutube(): Promise<void> {
-  const broadcasts = (await fetchYouTubeLiveBroadcasts()) as LiveBroadcast[];
-  const broadcast = broadcasts[0];
-  if (!broadcast) throw new Error('No live stream found. Start a live stream on YouTube, then try again.');
-
+export function connectYoutube(): void {
   stopYoutube();
-  const generation = youtubeGeneration;
-  const title = broadcast.snippet?.title || broadcast.id;
   useChatStore.getState().upsertConnection({
     id: 'youtube',
     type: 'youtube',
-    channelName: title,
+    channelName: 'YouTube live chat',
     status: 'connecting',
   });
 
-  // Setup failures are reported by the rejection below; only errors from a
-  // running poller go through onError.
-  let attached = false;
-  try {
-    const { disconnect } = await connectToYouTubeLiveChat(
-      broadcast.id,
-      (item: LiveChatItem) => {
-        if (generation !== youtubeGeneration) return;
-        const published = item.snippet?.publishedAt ? new Date(item.snippet.publishedAt).getTime() : Date.now();
-        receiveChatMessage(
-          'youtube',
-          item.id || randomId(),
-          item.authorDetails?.displayName || 'Anonymous',
-          item.snippet?.displayMessage || '',
-          published,
-        );
-      },
-      (error) => {
-        if (!attached || generation !== youtubeGeneration) return;
-        useChatStore.getState().updateConnection('youtube', { status: 'error', detail: error.message });
-        toast({ title: 'YouTube chat stopped', description: error.message, variant: 'destructive' });
-      },
-    );
-    if (generation !== youtubeGeneration) {
-      disconnect();
-      return;
-    }
-    attached = true;
-    youtubeDisconnect = disconnect;
-    useChatStore.getState().updateConnection('youtube', { status: 'connected' });
-    toast({ title: 'Connected to YouTube', description: `Now listening to live chat for: ${title}` });
-  } catch (error) {
-    if (generation === youtubeGeneration) useChatStore.getState().removeConnection('youtube');
-    throw error;
-  }
+  const notify = statusNotifier('YouTube');
+  const session = new YouTubeChatSession({
+    onMessage: (m) => receiveChatMessage('youtube', m.id, m.username, m.text),
+    onBroadcast: (title) => {
+      if (youtube === session) useChatStore.getState().updateConnection('youtube', { channelName: title });
+    },
+    onStatus: (status, detail) => {
+      if (youtube !== session) return;
+      useChatStore.getState().updateConnection('youtube', { status, detail });
+      notify(status, detail);
+      if (status === 'error') {
+        // A rejected refresh token clears the stored login; reflect that.
+        void hasYoutubeOAuthToken().then(authed => {
+          if (!authed) useAuthStore.getState().setYoutubeAuth(false);
+        });
+      }
+    },
+  });
+  youtube = session;
+  session.start();
 }
 
 function stopYoutube(): void {
-  youtubeGeneration += 1;
-  youtubeDisconnect?.();
-  youtubeDisconnect = null;
+  youtube?.stop();
+  youtube = null;
 }
 
 export function disconnectYoutube(): void {
@@ -194,5 +152,6 @@ if (typeof window !== 'undefined') {
   // Don't sit out the rest of a backoff wait once the network is back.
   window.addEventListener?.('online', () => {
     twitch?.retryNow();
+    youtube?.retryNow();
   });
 }

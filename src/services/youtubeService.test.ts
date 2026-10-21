@@ -5,9 +5,11 @@ vi.mock('@/lib/tauri-api', () => desktopTauriApi());
 
 import {
   clearYoutubeOAuthToken,
+  fetchActiveBroadcasts,
   getValidYoutubeToken,
   hasYoutubeOAuthToken,
   invalidateYoutubeAccessToken,
+  parseYouTubeError,
   saveYoutubeTokens,
 } from './youtubeService';
 
@@ -60,5 +62,33 @@ describe('youtubeService tokens', () => {
     await invalidateYoutubeAccessToken();
     commandHandlers.set('youtube_refresh_token', async () => ({ access_token: 'ya29.new', expires_in: 3599 }));
     expect(await getValidYoutubeToken()).toEqual({ status: 'ok', token: 'ya29.new' });
+  });
+});
+
+describe('youtubeService API', () => {
+  beforeEach(() => vi.unstubAllGlobals());
+
+  it('asks for every broadcast type, so "Stream now" streams are found', async () => {
+    const fetchMock = vi.fn(async (_url: string) => new Response(JSON.stringify({ items: [{ id: 'b1' }] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await fetchActiveBroadcasts('token')).toEqual([{ id: 'b1' }]);
+    const url = new URL(fetchMock.mock.calls[0][0]);
+    expect(url.searchParams.get('broadcastType')).toBe('all');
+    expect(url.searchParams.get('broadcastStatus')).toBe('active');
+  });
+
+  it('surfaces the API error reason', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ error: { code: 403, message: 'quota', errors: [{ reason: 'quotaExceeded' }] } }),
+      { status: 403 },
+    )));
+    await expect(fetchActiveBroadcasts('token')).rejects.toMatchObject({ status: 403, reason: 'quotaExceeded' });
+  });
+
+  it('parses error bodies that are not JSON', () => {
+    const error = parseYouTubeError(502, '<html>Bad Gateway</html>');
+    expect(error.status).toBe(502);
+    expect(error.reason).toBe('');
   });
 });
