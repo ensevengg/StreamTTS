@@ -1,4 +1,5 @@
 import { backoffDelay, BoundedSet } from '@/lib/resilience';
+import type { AlertData } from '@/services/alertsService';
 import {
   fetchActiveBroadcasts,
   fetchLiveChatPage,
@@ -21,6 +22,7 @@ export interface YouTubeChatMessage {
 
 export interface YouTubeChatHandlers {
   onMessage: (message: YouTubeChatMessage) => void;
+  onAlert: (alert: AlertData) => void;
   onStatus: (status: YouTubeChatStatus, detail?: string) => void;
   onBroadcast: (title: string) => void;
 }
@@ -97,6 +99,64 @@ export function classifyYouTubeError(error: unknown): ErrorKind {
     return { kind: 'fatal', message: 'YouTube denied access to this chat. Log out and log in again.' };
   }
   return { kind: 'fatal', message: `YouTube rejected the request: ${error.message}` };
+}
+
+const limit = (text: string | undefined, max: number): string => (text ?? '').trim().slice(0, max);
+
+/** Super Chats, stickers and memberships arrive in the chat feed itself. */
+export function chatItemToAlert(item: LiveChatItem): AlertData | null {
+  const snippet = item.snippet;
+  const user = limit(item.authorDetails?.displayName, 50) || 'Someone';
+  switch (snippet?.type) {
+    case 'superChatEvent':
+      return {
+        platform: 'youtube',
+        alert_type: 'superchat',
+        user_name: user,
+        message: `${user} sent a ${limit(snippet.superChatDetails?.amountDisplayString, 20)} Super Chat!`,
+        detail: limit(snippet.superChatDetails?.userComment, 200) || undefined,
+      };
+    case 'superStickerEvent':
+      return {
+        platform: 'youtube',
+        alert_type: 'superchat',
+        user_name: user,
+        message: `${user} sent a ${limit(snippet.superStickerDetails?.amountDisplayString, 20)} Super Sticker!`,
+      };
+    case 'newSponsorEvent': {
+      const level = limit(snippet.newSponsorDetails?.memberLevelName, 50);
+      return {
+        platform: 'youtube',
+        alert_type: 'member',
+        user_name: user,
+        message: snippet.newSponsorDetails?.isUpgrade && level
+          ? `${user} upgraded to ${level}!`
+          : `${user} just became a member!`,
+      };
+    }
+    case 'membershipGiftingEvent': {
+      const count = snippet.membershipGiftingDetails?.giftMembershipsCount ?? 1;
+      return {
+        platform: 'youtube',
+        alert_type: 'member',
+        user_name: user,
+        message: `${user} gifted ${count} membership${count === 1 ? '' : 's'}!`,
+        count,
+      };
+    }
+    case 'memberMilestoneChatEvent': {
+      const months = snippet.memberMilestoneChatDetails?.memberMonth;
+      return {
+        platform: 'youtube',
+        alert_type: 'member',
+        user_name: user,
+        message: months ? `${user} has been a member for ${months} months!` : `${user} hit a membership milestone!`,
+        detail: limit(snippet.memberMilestoneChatDetails?.userComment, 200) || undefined,
+      };
+    }
+    default:
+      return null;
+  }
 }
 
 type Task = 'discover' | 'poll';
@@ -265,7 +325,10 @@ export class YouTubeChatSession {
         username: item.authorDetails?.displayName || 'Anonymous',
         text: item.snippet.displayMessage ?? '',
       });
+      return;
     }
+    const alert = chatItemToAlert(item);
+    if (alert) this.handlers.onAlert(alert);
   }
 
   private chatEnded(chat: AttachedChat, detail: string): void {

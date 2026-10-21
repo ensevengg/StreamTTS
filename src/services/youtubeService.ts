@@ -163,6 +163,11 @@ export interface LiveChatItem {
     type?: string;
     publishedAt?: string;
     displayMessage?: string;
+    superChatDetails?: { amountDisplayString?: string; userComment?: string };
+    superStickerDetails?: { amountDisplayString?: string };
+    newSponsorDetails?: { memberLevelName?: string; isUpgrade?: boolean };
+    membershipGiftingDetails?: { giftMembershipsCount?: number };
+    memberMilestoneChatDetails?: { memberMonth?: number; userComment?: string };
   };
   authorDetails?: { displayName?: string; channelId?: string };
 }

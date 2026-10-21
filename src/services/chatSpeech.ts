@@ -3,6 +3,7 @@ import { useChatStore } from '@/stores/chatStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { ttsQueueService } from '@/services/ttsQueueService';
 import { CooldownTracker, prepareSpeechText, stripCommandPrefix } from '@/services/ttsFilter';
+import type { AlertData } from '@/services/alertsService';
 import type { Message } from '@/types/message';
 
 const cooldowns = new CooldownTracker();
@@ -47,4 +48,19 @@ export function speakChatMessage(message: Message, { fromViewer }: { fromViewer:
     },
   });
   if (!accepted) updateMessageStatus(message.id, 'skipped', 'Too many messages from this viewer');
+}
+
+/** Alerts go ahead of waiting chat messages, at the alert volume. */
+export function speakAlert(alert: AlertData, volume: number): void {
+  const text = prepareSpeechText(alert.message, 300);
+  if (!text) return;
+  ttsQueueService.enqueue({
+    id: `alert-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    text,
+    priority: true,
+    volume,
+    onStatus: (status, detail) => {
+      if (status === 'error') reportSpeechError(detail);
+    },
+  });
 }

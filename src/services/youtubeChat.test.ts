@@ -3,10 +3,12 @@ import {
   BROADCAST_CHECK_MS,
   MIN_POLL_MS,
   YouTubeChatSession,
+  chatItemToAlert,
   classifyYouTubeError,
   type YouTubeChatDeps,
 } from './youtubeChat';
 import { YouTubeApiError, type LiveBroadcast, type LiveChatItem, type LiveChatPage } from './youtubeService';
+import type { AlertData } from './alertsService';
 
 const NOW = Date.parse('2026-10-20T12:00:00Z');
 
@@ -42,6 +44,7 @@ type PageStep = LiveChatPage | Error;
 
 function setup({ broadcasts, pages }: { broadcasts: LiveBroadcast[][]; pages: PageStep[] }) {
   const messages: string[] = [];
+  const alerts: AlertData[] = [];
   const statuses: string[] = [];
   const titles: string[] = [];
   const pageRequests: { liveChatId: string; pageToken: string | null }[] = [];
@@ -62,12 +65,13 @@ function setup({ broadcasts, pages }: { broadcasts: LiveBroadcast[][]; pages: Pa
   const session = new YouTubeChatSession(
     {
       onMessage: (m) => messages.push(m.text),
+      onAlert: (a) => alerts.push(a),
       onStatus: (status) => statuses.push(status),
       onBroadcast: (title) => titles.push(title),
     },
     deps,
   );
-  return { session, deps, messages, statuses, titles, pageRequests };
+  return { session, deps, messages, alerts, statuses, titles, pageRequests };
 }
 
 describe('YouTubeChatSession', () => {
@@ -220,6 +224,28 @@ describe('YouTubeChatSession', () => {
     expect(statuses[statuses.length - 1]).toBe('error');
   });
 
+  it('turns Super Chats into alerts, not TTS messages', async () => {
+    const superChat: LiveChatItem = {
+      id: 'sc1',
+      snippet: {
+        type: 'superChatEvent',
+        publishedAt: new Date(NOW).toISOString(),
+        superChatDetails: { amountDisplayString: '$5.00', userComment: 'great stream' },
+      },
+      authorDetails: { displayName: 'Fan' },
+    };
+    const { session, messages, alerts } = setup({
+      broadcasts: [[broadcast('chat1')]],
+      pages: [{ items: [], nextPageToken: 'p1' }, { items: [superChat], nextPageToken: 'p2' }],
+    });
+    session.start();
+    await advance(MIN_POLL_MS);
+    expect(messages).toEqual([]);
+    expect(alerts).toEqual([
+      expect.objectContaining({ alert_type: 'superchat', message: 'Fan sent a $5.00 Super Chat!', detail: 'great stream' }),
+    ]);
+    session.stop();
+  });
 });
 
 describe('classifyYouTubeError', () => {
@@ -232,5 +258,22 @@ describe('classifyYouTubeError', () => {
   it('distinguishes permanent failures', () => {
     expect(classifyYouTubeError(new YouTubeApiError(403, 'forbidden', '')).kind).toBe('fatal');
     expect(classifyYouTubeError(new YouTubeApiError(404, 'liveChatNotFound', '')).kind).toBe('chat_ended');
+  });
+});
+
+describe('chatItemToAlert', () => {
+  it('maps memberships and gifts', () => {
+    expect(chatItemToAlert({
+      id: '1',
+      snippet: { type: 'membershipGiftingEvent', membershipGiftingDetails: { giftMembershipsCount: 5 } },
+      authorDetails: { displayName: 'Gifter' },
+    })).toEqual(expect.objectContaining({ alert_type: 'member', count: 5, message: 'Gifter gifted 5 memberships!' }));
+
+    expect(chatItemToAlert({ id: '2', snippet: { type: 'newSponsorEvent' }, authorDetails: { displayName: 'New' } }))
+      .toEqual(expect.objectContaining({ message: 'New just became a member!' }));
+  });
+
+  it('ignores plain chat', () => {
+    expect(chatItemToAlert(text('1', 'hi'))).toBeNull();
   });
 });

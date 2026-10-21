@@ -10,6 +10,9 @@ export interface SpeechJob {
   text: string;
   /** Viewer the job came from; caps how many one viewer can have waiting. */
   owner?: string;
+  /** Alerts jump ahead of waiting chat messages. */
+  priority?: boolean;
+  volume?: number;
   onStatus?: (status: SpeechJobStatus, detail?: string) => void;
 }
 
@@ -31,7 +34,7 @@ const defaultDeps: QueueDeps = {
   setProcessing: (processing) => useChatStore.getState().setIsProcessing(processing),
 };
 
-/** Plays one message at a time, in order. */
+/** Plays one job at a time, in order, for chat messages and alerts alike. */
 export class TtsQueue {
   private waiting: SpeechJob[] = [];
   private current: { job: SpeechJob; controller: AbortController } | null = null;
@@ -46,12 +49,20 @@ export class TtsQueue {
       if (queued >= MAX_QUEUED_PER_VIEWER) return false;
     }
     if (this.waiting.length >= MAX_QUEUE_LENGTH) {
-      // Drop the oldest waiting message. The job being spoken isn't in
+      // Drop the oldest waiting chat message. The job being spoken isn't in
       // `waiting`, so it is never the one dropped.
-      const dropped = this.waiting.shift() as SpeechJob;
+      const index = this.waiting.findIndex(j => !j.priority);
+      if (index === -1) return false;
+      const [dropped] = this.waiting.splice(index, 1);
       dropped.onStatus?.('skipped', 'The queue was full');
     }
-    this.waiting.push(job);
+
+    if (job.priority) {
+      const firstChat = this.waiting.findIndex(j => !j.priority);
+      this.waiting.splice(firstChat === -1 ? this.waiting.length : firstChat, 0, job);
+    } else {
+      this.waiting.push(job);
+    }
     void this.run();
     return true;
   }
@@ -85,7 +96,11 @@ export class TtsQueue {
         job.onStatus?.('playing');
         const settings = this.deps.getSettings();
         try {
-          await this.deps.speak(job.text, { ...settings, signal: controller.signal });
+          await this.deps.speak(job.text, {
+            ...settings,
+            volume: job.volume ?? settings.volume,
+            signal: controller.signal,
+          });
           job.onStatus?.('completed');
         } catch (error) {
           if (controller.signal.aborted) {

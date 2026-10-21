@@ -5,57 +5,51 @@ import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { AlertService, type AlertSettings } from '@/services/alertsService';
+import { AlertService, DEFAULT_ALERT_SETTINGS, type AlertSettings } from '@/services/alertsService';
 
-interface AlertSettingsProps {
-  className?: string;
-}
+type ToggleKey = Exclude<keyof AlertSettings, 'volume' | 'enabled'>;
 
-const AlertSettings: React.FC<AlertSettingsProps> = ({ className }) => {
-  const [settings, setSettings] = useState<AlertSettings>({
-    enabled: true,
-    twitchSubs: true,
-    twitchGifts: true,
-    twitchRedemptions: true,
-    youtubeLive: true,
-    volume: 0.8,
-  });
+const TOGGLES: { platform: string; note: string; items: { key: ToggleKey; label: string; description: string }[] }[] = [
+  {
+    platform: 'Twitch Alerts',
+    note: 'Arrive while Twitch chat is connected. Subs and channel points need an Affiliate or Partner channel.',
+    items: [
+      { key: 'twitchSubs', label: 'New Subscriptions', description: 'Alert when someone subscribes to the channel' },
+      { key: 'twitchGifts', label: 'Gifted Subscriptions', description: 'Alert when someone gifts subscriptions' },
+      { key: 'twitchRedemptions', label: 'Channel Point Redemptions', description: 'Alert when viewers redeem channel points' },
+    ],
+  },
+  {
+    platform: 'YouTube Alerts',
+    note: 'Arrive while YouTube live chat is connected.',
+    items: [
+      { key: 'youtubeSuperChats', label: 'Super Chats & Stickers', description: 'Alert when a viewer sends a Super Chat or Super Sticker' },
+      { key: 'youtubeMemberships', label: 'Memberships', description: 'Alert on new, gifted and milestone memberships' },
+    ],
+  },
+];
 
+const AlertSettingsCard: React.FC = () => {
+  const [settings, setSettings] = useState<AlertSettings>(DEFAULT_ALERT_SETTINGS);
   const [isSaved, setIsSaved] = useState(false);
 
   useEffect(() => {
-    const alertService = AlertService.getInstance();
-    setSettings(alertService.getSettings());
+    setSettings(AlertService.getInstance().getSettings());
   }, []);
 
-  const handleSettingChange = (key: keyof AlertSettings, value: any) => {
-    const newSettings = { ...settings, [key]: value };
-    setSettings(newSettings);
+  const handleSettingChange = <K extends keyof AlertSettings>(key: K, value: AlertSettings[K]) => {
+    setSettings(prev => ({ ...prev, [key]: value }));
     setIsSaved(false);
   };
 
   const saveSettings = () => {
-    const alertService = AlertService.getInstance();
-    alertService.updateSettings(settings);
+    AlertService.getInstance().updateSettings(settings);
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 2000);
   };
 
-  const resetToDefaults = () => {
-    const defaultSettings = {
-      enabled: true,
-      twitchSubs: true,
-      twitchGifts: true,
-      twitchRedemptions: true,
-      youtubeLive: true,
-      volume: 0.8,
-    };
-    setSettings(defaultSettings);
-    setIsSaved(false);
-  };
-
   return (
-    <Card className={className}>
+    <Card>
       <CardHeader>
         <CardTitle className="flex items-center justify-between">
           <span>Integration Alerts</span>
@@ -64,7 +58,7 @@ const AlertSettings: React.FC<AlertSettingsProps> = ({ className }) => {
           </Badge>
         </CardTitle>
         <CardDescription>
-          Configure alerts for Twitch subscriptions, donations, and YouTube events
+          Read out and show subscriptions, Super Chats and other channel events
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -85,73 +79,30 @@ const AlertSettings: React.FC<AlertSettingsProps> = ({ className }) => {
 
           {settings.enabled && (
             <>
-              <div className="space-y-4 pt-4 border-t">
-                <h4 className="font-medium">Twitch Alerts</h4>
-                
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label htmlFor="twitch-subs">New Subscriptions</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Alert when someone subscribes to the channel
-                    </p>
+              {TOGGLES.map(group => (
+                <div key={group.platform} className="space-y-4 pt-4 border-t">
+                  <div>
+                    <h4 className="font-medium">{group.platform}</h4>
+                    <p className="text-xs text-muted-foreground">{group.note}</p>
                   </div>
-                  <Switch
-                    id="twitch-subs"
-                    checked={settings.twitchSubs}
-                    onCheckedChange={(checked) => handleSettingChange('twitchSubs', checked)}
-                  />
+                  {group.items.map(item => (
+                    <div key={item.key} className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <Label htmlFor={item.key}>{item.label}</Label>
+                        <p className="text-sm text-muted-foreground">{item.description}</p>
+                      </div>
+                      <Switch
+                        id={item.key}
+                        checked={settings[item.key]}
+                        onCheckedChange={(checked) => handleSettingChange(item.key, checked)}
+                      />
+                    </div>
+                  ))}
                 </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label htmlFor="twitch-gifts">Gifted Subscriptions</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Alert when someone gifts subscriptions
-                    </p>
-                  </div>
-                  <Switch
-                    id="twitch-gifts"
-                    checked={settings.twitchGifts}
-                    onCheckedChange={(checked) => handleSettingChange('twitchGifts', checked)}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label htmlFor="twitch-redemptions">Channel Point Redemptions</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Alert when viewers redeem channel points
-                    </p>
-                  </div>
-                  <Switch
-                    id="twitch-redemptions"
-                    checked={settings.twitchRedemptions}
-                    onCheckedChange={(checked) => handleSettingChange('twitchRedemptions', checked)}
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-4 pt-4 border-t">
-                <h4 className="font-medium">YouTube Alerts</h4>
-                
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label htmlFor="youtube-live">Live Stream Started</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Alert when a new video or stream goes live
-                    </p>
-                  </div>
-                  <Switch
-                    id="youtube-live"
-                    checked={settings.youtubeLive}
-                    onCheckedChange={(checked) => handleSettingChange('youtubeLive', checked)}
-                  />
-                </div>
-              </div>
+              ))}
 
               <div className="space-y-4 pt-4 border-t">
                 <h4 className="font-medium">Alert Settings</h4>
-                
                 <div className="space-y-2">
                   <Label htmlFor="alert-volume">
                     Alert Volume: {Math.round(settings.volume * 100)}%
@@ -172,13 +123,16 @@ const AlertSettings: React.FC<AlertSettingsProps> = ({ className }) => {
         </div>
 
         <div className="flex justify-between items-center pt-4 border-t">
-          <Button variant="outline" onClick={resetToDefaults}>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setSettings({ ...DEFAULT_ALERT_SETTINGS });
+              setIsSaved(false);
+            }}
+          >
             Reset to Defaults
           </Button>
-          <Button 
-            onClick={saveSettings}
-            disabled={isSaved}
-          >
+          <Button onClick={saveSettings} disabled={isSaved}>
             {isSaved ? "Saved!" : "Save Settings"}
           </Button>
         </div>
@@ -187,4 +141,4 @@ const AlertSettings: React.FC<AlertSettingsProps> = ({ className }) => {
   );
 };
 
-export default AlertSettings;
+export default AlertSettingsCard;

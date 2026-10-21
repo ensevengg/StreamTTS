@@ -8,6 +8,9 @@ const VALIDATE_URL = 'https://id.twitch.tv/oauth2/validate';
 /** Refresh this long before the 4-hour access token runs out. */
 const TOKEN_EXPIRY_BUFFER_MS = 10 * 60 * 1000;
 
+/** Scopes the EventSub alerts need on top of chat:read. */
+export const TWITCH_ALERT_SCOPES = ['channel:read:subscriptions', 'channel:read:redemptions'];
+
 interface TwitchTokenInfo {
   token: string;
   refresh_token?: string;

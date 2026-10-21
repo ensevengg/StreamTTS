@@ -106,8 +106,6 @@ describe('TtsQueue', () => {
     expect(playing.statuses).toEqual(['playing', 'completed']);
   });
 
-
-
   it('caps how many jobs one viewer can have waiting', async () => {
     const speech = controllableSpeech();
     const { queue } = makeQueue(speech.speak);
@@ -118,6 +116,18 @@ describe('TtsQueue', () => {
     }
     expect(queue.enqueue(job('extra', { owner: 'spammer' }))).toBe(false);
     expect(queue.enqueue(job('other', { owner: 'someone-else' }))).toBe(true);
+  });
+
+  it('puts alerts ahead of waiting chat, behind earlier alerts', async () => {
+    const speech = controllableSpeech();
+    const { queue } = makeQueue(speech.speak);
+    queue.enqueue(job('chat1'));
+    queue.enqueue(job('chat2'));
+    queue.enqueue(job('alert1', { priority: true }));
+    queue.enqueue(job('alert2', { priority: true }));
+    await flush();
+    for (let i = 0; i < 4; i++) await speech.finishCurrent();
+    expect(speech.spoken).toEqual(['chat1', 'alert1', 'alert2', 'chat2']);
   });
 
   it('marks failures and keeps going', async () => {
@@ -135,4 +145,11 @@ describe('TtsQueue', () => {
     expect(next.statuses).toEqual(['playing', 'completed']);
   });
 
+  it('uses a job volume override', async () => {
+    const speak = vi.fn().mockResolvedValue(undefined);
+    const { queue } = makeQueue(speak);
+    queue.enqueue(job('alert', { volume: 0.2 }));
+    await flush();
+    expect(speak.mock.calls[0][1].volume).toBe(0.2);
+  });
 });

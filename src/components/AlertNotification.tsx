@@ -1,107 +1,53 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AlertService, type AlertData } from '@/services/alertsService';
+import { AlertService, type AlertData, type AlertType } from '@/services/alertsService';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { X } from 'lucide-react';
 
-interface AlertNotificationProps {
-  className?: string;
-}
+const DISPLAY_MS = 6000;
+/** A gift bomb shouldn't bury the screen. */
+const MAX_VISIBLE = 5;
 
-const AlertNotification: React.FC<AlertNotificationProps> = ({ className }) => {
-  const [alerts, setAlerts] = useState<(AlertData & { id: string })[]>([]);
-  const timeoutIdsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+const PLATFORM_STYLES: Record<AlertData['platform'], { badge: string; accent: string }> = {
+  twitch: { badge: 'bg-purple-500', accent: '#a855f7' },
+  youtube: { badge: 'bg-red-500', accent: '#ef4444' },
+};
+
+const TYPE_STYLES: Record<AlertType, { icon: string; label: string; className: string }> = {
+  sub: { icon: '⭐', label: 'SUB', className: 'bg-green-100 text-green-800' },
+  gift: { icon: '🎁', label: 'GIFT', className: 'bg-purple-100 text-purple-800' },
+  redemption: { icon: '💎', label: 'REDEMPTION', className: 'bg-blue-100 text-blue-800' },
+  superchat: { icon: '💰', label: 'SUPER CHAT', className: 'bg-yellow-100 text-yellow-800' },
+  member: { icon: '🏅', label: 'MEMBER', className: 'bg-emerald-100 text-emerald-800' },
+};
+
+type ShownAlert = AlertData & { id: string };
+
+const AlertNotification: React.FC = () => {
+  const [alerts, setAlerts] = useState<ShownAlert[]>([]);
+  const timeouts = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
   useEffect(() => {
-    const timeouts = timeoutIdsRef.current;
+    const pending = timeouts.current;
+    const unsubscribe = AlertService.getInstance().subscribe((alert) => {
+      const shown = { ...alert, id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}` };
+      setAlerts(prev => [...prev, shown].slice(-MAX_VISIBLE));
+      pending.set(shown.id, setTimeout(() => {
+        pending.delete(shown.id);
+        setAlerts(prev => prev.filter(a => a.id !== shown.id));
+      }, DISPLAY_MS));
+    });
     return () => {
-      timeouts.forEach(timeoutId => clearTimeout(timeoutId));
-      timeouts.clear();
-    };
-  }, []);
-
-  useEffect(() => {
-    const alertService = AlertService.getInstance();
-    
-    const handleAlert = (alert: AlertData) => {
-      const alertWithId = { ...alert, id: Date.now().toString() };
-      setAlerts(prev => [...prev, alertWithId]);
-
-      // Auto-dismiss after 5 seconds
-      const timeoutId = setTimeout(() => {
-        setAlerts(prev => prev.filter(a => a.id !== alertWithId.id));
-        timeoutIdsRef.current.delete(alertWithId.id);
-      }, 5000);
-
-      timeoutIdsRef.current.set(alertWithId.id, timeoutId);
-    };
-
-    alertService.addAlertListener(handleAlert);
-    
-    return () => {
-      alertService.removeAlertListener(handleAlert);
+      unsubscribe();
+      pending.forEach(clearTimeout);
+      pending.clear();
     };
   }, []);
 
   const dismissAlert = (id: string) => {
-    const timeoutId = timeoutIdsRef.current.get(id);
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-      timeoutIdsRef.current.delete(id);
-    }
+    clearTimeout(timeouts.current.get(id));
+    timeouts.current.delete(id);
     setAlerts(prev => prev.filter(a => a.id !== id));
-  };
-
-  const getPlatformColor = (platform: string) => {
-    switch (platform) {
-      case 'twitch':
-        return 'bg-purple-500';
-      case 'youtube':
-        return 'bg-red-500';
-      default:
-        return 'bg-blue-500';
-    }
-  };
-
-  const getPlatformAccent = (platform: string) => {
-    switch (platform) {
-      case 'twitch':
-        return '#a855f7';
-      case 'youtube':
-        return '#ef4444';
-      default:
-        return '#3b82f6';
-    }
-  };
-
-  const getAlertIcon = (alertType: string) => {
-    switch (alertType) {
-      case 'sub':
-        return '⭐';
-      case 'gift':
-        return '🎁';
-      case 'redemption':
-        return '💎';
-      case 'live':
-        return '🔴';
-      default:
-        return '🔔';
-    }
-  };
-
-  const getAlertTypeColor = (alertType: string) => {
-    switch (alertType) {
-      case 'sub':
-        return 'bg-green-100 text-green-800';
-      case 'gift':
-        return 'bg-purple-100 text-purple-800';
-      case 'redemption':
-        return 'bg-blue-100 text-blue-800';
-      case 'live':
-        return 'bg-red-100 text-red-800';
-      default:
-        return 'bg-gray-100 text-gray-800';
-    }
   };
 
   if (alerts.length === 0) {
@@ -109,49 +55,40 @@ const AlertNotification: React.FC<AlertNotificationProps> = ({ className }) => {
   }
 
   return (
-    <div className={`fixed top-4 right-4 z-50 space-y-2 ${className}`}>
-      {alerts.map((alert) => (
-        <Card
-          key={alert.id}
-          className="w-80 p-4 shadow-lg border-l-4 animate-in slide-in-from-right"
-          style={{ borderLeftColor: getPlatformAccent(alert.platform) }}
-        >
-          <div className="flex items-start justify-between">
-            <div className="flex items-start space-x-3 flex-1">
-              <div className="text-2xl">
-                {getAlertIcon(alert.alert_type)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center space-x-2 mb-1">
-                  <Badge className={getPlatformColor(alert.platform)}>
-                    {alert.platform.toUpperCase()}
-                  </Badge>
-                  <Badge variant="outline" className={getAlertTypeColor(alert.alert_type)}>
-                    {alert.alert_type.toUpperCase()}
-                  </Badge>
+    <div className="fixed top-4 right-4 z-50 space-y-2">
+      {alerts.map((alert) => {
+        const platform = PLATFORM_STYLES[alert.platform];
+        const type = TYPE_STYLES[alert.alert_type];
+        return (
+          <Card
+            key={alert.id}
+            className="w-80 p-4 shadow-lg border-l-4 animate-in slide-in-from-right"
+            style={{ borderLeftColor: platform.accent }}
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex items-start space-x-3 flex-1">
+                <div className="text-2xl">{type.icon}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center space-x-2 mb-1">
+                    <Badge className={platform.badge}>{alert.platform.toUpperCase()}</Badge>
+                    <Badge variant="outline" className={type.className}>{type.label}</Badge>
+                  </div>
+                  <p className="font-medium text-sm">{alert.user_name}</p>
+                  <p className="text-sm text-muted-foreground mt-1">{alert.message}</p>
+                  {alert.detail && <p className="text-sm italic mt-1 break-words">“{alert.detail}”</p>}
                 </div>
-                <p className="font-medium text-sm">
-                  {alert.user_name}
-                </p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  {alert.message}
-                </p>
-                {alert.count && (
-                  <p className="text-sm font-semibold text-purple-600 mt-1">
-                    {alert.count} items
-                  </p>
-                )}
               </div>
+              <button
+                onClick={() => dismissAlert(alert.id)}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+                aria-label="Dismiss alert"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
-            <button
-              onClick={() => dismissAlert(alert.id)}
-              className="text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </Card>
-      ))}
+          </Card>
+        );
+      })}
     </div>
   );
 };
