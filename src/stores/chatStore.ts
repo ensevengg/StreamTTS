@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Message } from '@/types/message';
+import { Message, MessageStatus } from '@/types/message';
 import { ChatConnection, ChatPlatform } from '@/types/chatSource';
 
 const MAX_MESSAGES = 500;
@@ -10,7 +10,7 @@ interface ChatState {
   activeTab: string;
   isProcessing: boolean;
   addMessage: (message: Message) => void;
-  updateMessageStatus: (id: string, status: Message['status']) => void;
+  updateMessageStatus: (id: string, status: MessageStatus, detail?: string) => void;
   upsertConnection: (connection: ChatConnection) => void;
   updateConnection: (id: ChatPlatform, patch: Partial<Omit<ChatConnection, 'id' | 'type'>>) => void;
   removeConnection: (id: ChatPlatform) => void;
@@ -30,12 +30,14 @@ export const useChatStore = create<ChatState>((set) => ({
       return { messages: next.length > MAX_MESSAGES ? next.slice(-MAX_MESSAGES) : next };
     }),
 
-  updateMessageStatus: (id, status) =>
-    set((state) => ({
-      messages: state.messages.map((msg) =>
-        msg.id === id ? { ...msg, status } : msg
-      ),
-    })),
+  updateMessageStatus: (id, status, detail) =>
+    set((state) => {
+      const index = state.messages.findIndex((msg) => msg.id === id);
+      if (index === -1) return state;
+      const messages = state.messages.slice();
+      messages[index] = { ...messages[index], status, statusDetail: detail };
+      return { messages };
+    }),
 
   upsertConnection: (connection) =>
     set((state) => ({

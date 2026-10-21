@@ -1,108 +1,99 @@
-import { Message } from '@/types/message';
-import { playMessageAudio } from '@/services/ttsService';
+import { speak, type SpeakOptions } from '@/services/ttsService';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useChatStore } from '@/stores/chatStore';
+import { errorMessage } from '@/lib/http';
 
-const MAX_QUEUE_LENGTH = 50;
+export type SpeechJobStatus = 'playing' | 'completed' | 'skipped' | 'error';
 
-type Listener = () => void;
+export interface SpeechJob {
+  id: string;
+  text: string;
+  onStatus?: (status: SpeechJobStatus, detail?: string) => void;
+}
 
-class TtsQueueService {
-  private queue: Message[] = [];
-  private processing = false;
-  private aborted = false;
-  private listeners: Set<Listener> = new Set();
+export const MAX_QUEUE_LENGTH = 50;
 
-  enqueue(message: Message): void {
-    if (this.queue.length >= MAX_QUEUE_LENGTH) {
-      const dropped = this.queue.shift()!;
-      useChatStore.getState().updateMessageStatus(dropped.id, 'error');
+interface QueueDeps {
+  speak: (text: string, options: SpeakOptions) => Promise<void>;
+  getSettings: () => Pick<SpeakOptions, 'provider' | 'apiKey' | 'volume' | 'voiceName'>;
+  setProcessing: (processing: boolean) => void;
+}
+
+const defaultDeps: QueueDeps = {
+  speak,
+  getSettings: () => {
+    const { ttsProvider, apiKey, volume, selectedVoice } = useSettingsStore.getState();
+    return { provider: ttsProvider, apiKey, volume, voiceName: selectedVoice || undefined };
+  },
+  setProcessing: (processing) => useChatStore.getState().setIsProcessing(processing),
+};
+
+/** Plays one message at a time, in order. */
+export class TtsQueue {
+  private waiting: SpeechJob[] = [];
+  private current: { job: SpeechJob; controller: AbortController } | null = null;
+  private running = false;
+
+  constructor(private readonly deps: QueueDeps = defaultDeps) {}
+
+  enqueue(job: SpeechJob): void {
+    if (this.waiting.length >= MAX_QUEUE_LENGTH) {
+      // Drop the oldest waiting message. The job being spoken isn't in
+      // `waiting`, so it is never the one dropped.
+      const dropped = this.waiting.shift() as SpeechJob;
+      dropped.onStatus?.('skipped', 'The queue was full');
     }
-    this.aborted = false;
-    message.timings = { ...message.timings, received: message.timings?.received || Date.now(), queued: Date.now() };
-    this.queue.push(message);
-    this.notify();
-    this.process();
+    this.waiting.push(job);
+    void this.run();
   }
 
+  /** Stops whatever is playing; the next job starts right away. */
+  skip(): void {
+    this.current?.controller.abort();
+  }
+
+  /** Drops everything waiting and stops what is playing. */
   clear(): void {
-    this.queue = [];
-    this.aborted = true;
-    this.processing = false;
-    this.notify();
+    const dropped = this.waiting;
+    this.waiting = [];
+    for (const job of dropped) job.onStatus?.('skipped', 'Queue cleared');
+    this.skip();
   }
 
-  cancel(): void {
-    this.aborted = true;
-    this.notify();
+  get length(): number {
+    return this.waiting.length;
   }
 
-  getQueueLength(): number {
-    return this.queue.length;
-  }
-
-  isProcessing(): boolean {
-    return this.processing;
-  }
-
-  subscribe(listener: Listener): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  private notify(): void {
-    this.listeners.forEach(fn => fn());
-  }
-
-  private async process(): Promise<void> {
-    if (this.processing || this.aborted) return;
-    this.processing = true;
-    useChatStore.getState().setIsProcessing(true);
-    this.notify();
-
-    while (this.queue.length > 0) {
-      if (this.aborted) break;
-
-      const msg = this.queue[0];
-      const { apiKey, volume, ttsProvider, selectedVoice } = useSettingsStore.getState();
-
-      if (ttsProvider === 'elevenlabs' && !apiKey) {
-        useChatStore.getState().updateMessageStatus(msg.id, 'error');
-        this.queue.shift();
-        this.notify();
-        continue;
+  private async run(): Promise<void> {
+    if (this.running) return;
+    this.running = true;
+    this.deps.setProcessing(true);
+    try {
+      while (this.waiting.length > 0) {
+        const job = this.waiting.shift() as SpeechJob;
+        const controller = new AbortController();
+        this.current = { job, controller };
+        job.onStatus?.('playing');
+        const settings = this.deps.getSettings();
+        try {
+          await this.deps.speak(job.text, { ...settings, signal: controller.signal });
+          job.onStatus?.('completed');
+        } catch (error) {
+          if (controller.signal.aborted) {
+            job.onStatus?.('skipped', 'Skipped');
+          } else {
+            console.error('TTS playback failed:', error);
+            job.onStatus?.('error', errorMessage(error));
+          }
+        } finally {
+          this.current = null;
+        }
       }
-
-      try {
-        useChatStore.getState().updateMessageStatus(msg.id, 'playing');
-        msg.timings = { ...msg.timings, playbackStarted: Date.now() };
-
-        await playMessageAudio(
-          msg,
-          apiKey,
-          () => {},
-          () => {
-            msg.timings = { ...msg.timings, playbackCompleted: Date.now() };
-            useChatStore.getState().updateMessageStatus(msg.id, 'completed');
-          },
-          volume,
-          ttsProvider,
-          selectedVoice,
-        );
-      } catch (error) {
-        console.error('Error processing message:', error);
-        useChatStore.getState().updateMessageStatus(msg.id, 'error');
-      }
-
-      this.queue.shift();
-      this.notify();
+    } finally {
+      this.running = false;
+      this.deps.setProcessing(false);
     }
-
-    this.processing = false;
-    this.aborted = false;
-    useChatStore.getState().setIsProcessing(false);
-    this.notify();
   }
 }
 
-export const ttsQueueService = new TtsQueueService();
+export const ttsQueueService = new TtsQueue();

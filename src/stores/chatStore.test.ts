@@ -8,7 +8,6 @@ const makeMsg = (id: string): Message => ({
   content: 'hello',
   timestamp: Date.now(),
   username: 'user',
-  status: 'pending',
 });
 
 const twitch: ChatConnection = { id: 'twitch', type: 'twitch', channelName: 'streamer', status: 'connecting' };
@@ -24,39 +23,28 @@ describe('chatStore', () => {
   });
 
   describe('messages', () => {
-    it('adds a message', () => {
-      useChatStore.getState().addMessage(makeMsg('1'));
-      expect(useChatStore.getState().messages).toHaveLength(1);
-    });
-
-    it('caps messages at MAX_MESSAGES (500)', () => {
-      const store = useChatStore.getState();
-      for (let i = 0; i < 505; i++) {
-        store.addMessage(makeMsg(`msg-${i}`));
-      }
-      expect(useChatStore.getState().messages).toHaveLength(500);
-    });
-
-    it('keeps the most recent messages when capped', () => {
+    it('keeps the most recent 500 messages', () => {
       const store = useChatStore.getState();
       for (let i = 0; i < 510; i++) {
         store.addMessage(makeMsg(`msg-${i}`));
       }
       const ids = useChatStore.getState().messages.map(m => m.id);
+      expect(ids).toHaveLength(500);
       expect(ids[0]).toBe('msg-10');
       expect(ids[ids.length - 1]).toBe('msg-509');
     });
 
-    it('updates message status', () => {
+    it('updates a message status with its reason', () => {
       useChatStore.getState().addMessage(makeMsg('1'));
-      useChatStore.getState().updateMessageStatus('1', 'playing');
-      expect(useChatStore.getState().messages[0].status).toBe('playing');
+      useChatStore.getState().updateMessageStatus('1', 'skipped', 'Viewer cooldown');
+      expect(useChatStore.getState().messages[0]).toMatchObject({ status: 'skipped', statusDetail: 'Viewer cooldown' });
     });
 
-    it('updateMessageStatus does nothing for unknown id', () => {
+    it('leaves state untouched for an unknown id', () => {
       useChatStore.getState().addMessage(makeMsg('1'));
+      const before = useChatStore.getState().messages;
       useChatStore.getState().updateMessageStatus('nonexistent', 'completed');
-      expect(useChatStore.getState().messages).toHaveLength(1);
+      expect(useChatStore.getState().messages).toBe(before);
     });
   });
 
@@ -84,21 +72,9 @@ describe('chatStore', () => {
     });
   });
 
-  describe('activeTab and isProcessing', () => {
-    it('defaults to chat tab', () => {
-      expect(useChatStore.getState().activeTab).toBe('chat');
-    });
-
-    it('setActiveTab changes tab', () => {
-      useChatStore.getState().setActiveTab('settings');
-      expect(useChatStore.getState().activeTab).toBe('settings');
-    });
-
-    it('setIsProcessing toggles processing', () => {
-      useChatStore.getState().setIsProcessing(true);
-      expect(useChatStore.getState().isProcessing).toBe(true);
-      useChatStore.getState().setIsProcessing(false);
-      expect(useChatStore.getState().isProcessing).toBe(false);
-    });
+  it('tracks the active tab and speech state', () => {
+    useChatStore.getState().setActiveTab('settings');
+    useChatStore.getState().setIsProcessing(true);
+    expect(useChatStore.getState()).toMatchObject({ activeTab: 'settings', isProcessing: true });
   });
 });

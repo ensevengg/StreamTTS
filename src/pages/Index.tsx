@@ -3,8 +3,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, Volume2, MessageSquare, Settings, Radio, Heart, Info, LogIn, ChevronDown, ChevronRight } from 'lucide-react';
+import { Mic, MessageSquare, Settings, Radio, Heart, Info, ChevronDown, ChevronRight, SkipForward, ListX } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
+import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -20,10 +21,12 @@ const ConnectionStatusPanel = lazy(() => import('@/components/ConnectionStatusPa
 const AlertSettings = lazy(() => import('@/components/AlertSettings'));
 
 import { Message } from '@/types/message';
+import { TTS_COMMAND_PREFIX } from '@/config/constants';
 import { getAvailableBrowserVoices } from '@/services/ttsService';
+import { ttsQueueService } from '@/services/ttsQueueService';
+import { speakChatMessage } from '@/services/chatSpeech';
 import { useChatStore } from '@/stores/chatStore';
 import { useSettingsStore, TTSProvider } from '@/stores/settingsStore';
-import { useTtsQueue } from '@/hooks/useTtsQueue';
 
 const Index = () => {
   const { toast } = useToast();
@@ -44,8 +47,6 @@ const Index = () => {
   const setVolume = useSettingsStore(s => s.setVolume);
   const setTtsProvider = useSettingsStore(s => s.setTtsProvider);
   const setSelectedVoice = useSettingsStore(s => s.setSelectedVoice);
-
-  const { enqueue } = useTtsQueue();
 
   useEffect(() => {
     if (activeTab === 'chat' && !ttsInitialized) {
@@ -125,18 +126,17 @@ const Index = () => {
     setSelectedVoice(voice);
   }, [setSelectedVoice]);
 
-  const handleSendMessage = useCallback((content: string, username?: string) => {
+  const handleSendMessage = useCallback((content: string) => {
     const newMessage: Message = {
-      id: Date.now().toString(),
+      id: `manual-${crypto.randomUUID()}`,
       content,
       timestamp: Date.now(),
-      username: username || 'You',
-      status: 'pending'
+      username: 'You',
     };
-    
+
     addMessage(newMessage);
-    enqueue(newMessage);
-  }, [addMessage, enqueue]);
+    speakChatMessage(newMessage);
+  }, [addMessage]);
 
   return (
     <div className="min-h-screen p-4 md:p-8 bg-stream-bg flex flex-col">
@@ -194,8 +194,16 @@ const Index = () => {
                     <MessageHistory />
                   </div>
                   
-                  <div className="flex justify-center my-4">
+                  <div className="flex flex-wrap items-center justify-center gap-3 my-4">
                     <VolumeControl volume={volume} onVolumeChange={handleVolumeChange} />
+                    <Button variant="outline" size="sm" onClick={() => ttsQueueService.skip()} disabled={!isProcessing}>
+                      <SkipForward className="h-4 w-4 mr-1" />
+                      Skip
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => ttsQueueService.clear()} disabled={!isProcessing}>
+                      <ListX className="h-4 w-4 mr-1" />
+                      Clear queue
+                    </Button>
                   </div>
                   
                   <MessageInput onSendMessage={handleSendMessage} ttsProvider={ttsProvider} />
@@ -282,10 +290,10 @@ const Index = () => {
                               <span className="text-stream-accent font-semibold">2.</span> Go to Connections and connect to Twitch or YouTube
                             </p>
                             <p>
-                              <span className="text-stream-accent font-semibold">3.</span> Messages starting with <code className="bg-muted px-1 rounded text-stream-accent">!г</code> will be read aloud
+                              <span className="text-stream-accent font-semibold">3.</span> Messages starting with <code className="bg-muted px-1 rounded text-stream-accent">{TTS_COMMAND_PREFIX}</code> will be read aloud
                             </p>
                             <p className="text-muted-foreground italic mt-4">
-                              Example: <code className="bg-muted px-1 rounded text-stream-accent">!г Привет!</code>
+                              Example: <code className="bg-muted px-1 rounded text-stream-accent">{TTS_COMMAND_PREFIX} Привет!</code>
                             </p>
                           </CardContent>
                         </CollapsibleContent>

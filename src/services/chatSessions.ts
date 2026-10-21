@@ -3,13 +3,12 @@ import { TTS_COMMAND_PREFIX } from '@/config/constants';
 import { useAuthStore } from '@/stores/authStore';
 import { useChatStore } from '@/stores/chatStore';
 import { cancelTwitchLogin } from '@/services/authService';
-import { ttsQueueService } from '@/services/ttsQueueService';
+import { speakChatMessage } from '@/services/chatSpeech';
 import { TwitchChatSession } from '@/services/twitchChat';
 import { clearTwitchOAuthToken, getTwitchIdentity } from '@/services/twitchService';
 import { YouTubeChatSession } from '@/services/youtubeChat';
 import { clearYoutubeOAuthToken, hasYoutubeOAuthToken } from '@/services/youtubeService';
 import type { ChatPlatform } from '@/types/chatSource';
-import type { Message } from '@/types/message';
 
 /*
  * Chat sessions live here, at module level, rather than in a component, so
@@ -21,9 +20,9 @@ let twitch: TwitchChatSession | null = null;
 let youtube: YouTubeChatSession | null = null;
 
 function receiveChatMessage(platform: ChatPlatform, id: string, username: string, text: string): void {
-  const message: Message = { id: `${platform}-${id}`, content: text, timestamp: Date.now(), username, status: 'pending' };
+  const message = { id: `${platform}-${id}`, content: text, timestamp: Date.now(), username };
   useChatStore.getState().addMessage(message);
-  if (text.startsWith(TTS_COMMAND_PREFIX)) ttsQueueService.enqueue(message);
+  if (text.startsWith(TTS_COMMAND_PREFIX)) speakChatMessage(message);
 }
 
 /** Toasts on the transitions that matter, not on every retry. */
